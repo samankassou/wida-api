@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using Wida.Dal.Persistence;
@@ -11,9 +12,11 @@ using Wida.Dal.Persistence;
 namespace Wida.Dal.Migrations
 {
     [DbContext(typeof(WidaDbContext))]
-    partial class WidaDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260906100427_AddProcessingEntities")]
+    partial class AddProcessingEntities
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

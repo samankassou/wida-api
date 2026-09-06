@@ -11,6 +11,10 @@ public class WidaDbContext(DbContextOptions<WidaDbContext> options) : DbContext(
 
     public DbSet<InvoiceLine> InvoiceLines => Set<InvoiceLine>();
 
+    public DbSet<ProcessingRun> ProcessingRuns => Set<ProcessingRun>();
+
+    public DbSet<ExtractedField> ExtractedFields => Set<ExtractedField>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ApplyConfigurationsFromAssembly(

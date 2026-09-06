@@ -12,6 +12,8 @@ public class Document
 
     public string StoragePath { get; set; } = string.Empty;
 
+    public ICollection<ProcessingRun> ProcessingRuns { get; set; } = [];
+
     public DocumentType DocumentType { get; set; } = DocumentType.Unknown;
 
     public DocumentStatus Status { get; set; } = DocumentStatus.Uploaded;
