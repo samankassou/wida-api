@@ -6,6 +6,8 @@
 
 Install the .NET 10 SDK and use a locally installed or remote PostgreSQL server.
 
+Run the commands below from the `Wida.Api` directory.
+
 1. Make sure PostgreSQL is running and create a database named `wida` with a login that can manage its tables, or use an existing database and login.
 2. Configure the API connection using .NET User Secrets (replace the host, database, username, and password with your PostgreSQL settings):
 
@@ -24,12 +26,11 @@ Install the .NET 10 SDK and use a locally installed or remote PostgreSQL server.
 
 ## Models and migrations
 
-Inject `AppDbContext` into endpoints or services to access PostgreSQL. Add domain models and their `DbSet<T>` properties in `Data/AppDbContext.cs`, then create and apply a migration:
+Inject `WidaDbContext` into endpoints or services to access PostgreSQL. Domain models and configurations live in `Wida.Dal`, alongside `Persistence/WidaDbContext.cs`. Create and apply a migration with:
 
 ```sh
 dotnet tool restore
-dotnet ef migrations add InitialCreate
-dotnet ef database update
+dotnet ef database update --project ../Wida.Dal --startup-project .
 ```
 
-There are no domain tables yet, so no initial migration is included. The weather forecast endpoint still generates sample data. Schema changes are applied explicitly with migrations, not automatically on application startup.
+The included `InitialCreate` migration creates the `Documents` table and EF migration history table. Schema changes are applied explicitly with migrations, not automatically on application startup. After future model changes, create a migration with `dotnet ef migrations add <Name> --project ../Wida.Dal --startup-project .`, then apply it with the update command above.

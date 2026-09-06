@@ -28,3 +28,6 @@ appsettings.Development.json
 
 # Logs
 *.log
+
+# Other files and folders
+uploads/*

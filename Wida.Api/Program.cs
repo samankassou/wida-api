@@ -1,5 +1,8 @@
 using Microsoft.EntityFrameworkCore;
-using Wida.Api.Data;
+using System.Text.Json.Serialization;
+using Scalar.AspNetCore;
+using Wida.Dal;
+using Wida.Bll;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -10,9 +13,18 @@ if (string.IsNullOrWhiteSpace(connectionString))
         "Configure ConnectionStrings:DefaultConnection using user secrets or ConnectionStrings__DefaultConnection.");
 }
 
-builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(connectionString));
+builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+    {
+        options.JsonSerializerOptions.Converters.Add(
+            new JsonStringEnumConverter());
+    });
 
 // Add services to the container.
+builder.Services
+    .AddDal(builder.Configuration)
+    .AddBll();
+
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
 
@@ -22,8 +34,11 @@ var app = builder.Build();
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
+    app.MapScalarApiReference();
 }
 
 app.UseHttpsRedirection();
+
+app.MapControllers();
 
 app.Run();
