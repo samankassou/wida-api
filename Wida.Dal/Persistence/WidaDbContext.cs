@@ -7,6 +7,10 @@ public class WidaDbContext(DbContextOptions<WidaDbContext> options) : DbContext(
 {
     public DbSet<Document> Documents => Set<Document>();
 
+    public DbSet<Invoice> Invoices => Set<Invoice>();
+
+    public DbSet<InvoiceLine> InvoiceLines => Set<InvoiceLine>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ApplyConfigurationsFromAssembly(

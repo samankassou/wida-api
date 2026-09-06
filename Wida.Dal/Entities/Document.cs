@@ -16,6 +16,8 @@ public class Document
 
     public DocumentStatus Status { get; set; } = DocumentStatus.Uploaded;
 
+    public Invoice? Invoice { get; set; }
+
     public DateTime UploadedAt { get; set; } = DateTime.UtcNow;
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
