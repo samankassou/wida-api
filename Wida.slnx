@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="Wida.Api/Wida.Api.csproj" />
+  <Project Path="Wida.Bll/Wida.Bll.csproj" />
+  <Project Path="Wida.Dal/Wida.Dal.csproj" />
+</Solution>
