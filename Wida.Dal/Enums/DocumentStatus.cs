@@ -8,5 +8,6 @@ public enum DocumentStatus
     ReviewRequired = 3,
     Approved = 4,
     Rejected = 5,
-    Failed = 6
+    Failed = 6,
+    Saved = 7
 }

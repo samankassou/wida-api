@@ -19,7 +19,6 @@ public class DocumentRepository : IDocumentRepository
         CancellationToken cancellationToken = default)
     {
         return _context.Documents
-            .AsNoTracking()
             .FirstOrDefaultAsync(
                 x => x.Id == id,
                 cancellationToken);
@@ -41,6 +40,26 @@ public class DocumentRepository : IDocumentRepository
         return _context.Documents
             .AddAsync(document, cancellationToken)
             .AsTask();
+    }
+
+    public async Task<IReadOnlyList<Document>> GetWorkspaceAsync(
+        int limit,
+        CancellationToken cancellationToken = default)
+    {
+        return await _context.Documents
+            .AsNoTracking()
+            .OrderByDescending(document => document.UploadedAt)
+            .ThenBy(document => document.Id)
+            .Take(limit)
+            .Include(document => document.Invoice)
+                .ThenInclude(invoice => invoice!.Lines)
+            .Include(document => document.ProcessingRuns
+                .OrderByDescending(run => run.StartedAt)
+                .ThenByDescending(run => run.Id)
+                .Take(1))
+                .ThenInclude(run => run.ExtractedFields)
+            .AsSplitQuery()
+            .ToListAsync(cancellationToken);
     }
 
     public Task SaveChangesAsync(

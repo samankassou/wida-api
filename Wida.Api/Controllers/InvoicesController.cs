@@ -1,6 +1,9 @@
 using Microsoft.AspNetCore.Mvc;
 using Wida.Bll.Dtos.Invoices;
 using Wida.Bll.Services.Interfaces;
+using Wida.Bll.Exceptions;
+using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace Wida.Api.Controllers;
 
@@ -32,6 +35,14 @@ public class InvoicesController : ControllerBase
         return Ok(invoice);
     }
 
+    [HttpGet]
+    public async Task<IActionResult> GetAll(CancellationToken cancellationToken) =>
+        Ok(await _invoiceService.GetAllAsync(cancellationToken));
+
+    [HttpPut("{id:guid}")]
+    public Task<IActionResult> Update(Guid id, CreateInvoiceRequest request, CancellationToken cancellationToken) =>
+        WithInvoiceErrors(async () => Ok(await _invoiceService.UpdateAsync(id, request, cancellationToken)));
+
     [HttpGet("document/{documentId:guid}")]
     public async Task<IActionResult> GetByDocumentId(
         Guid documentId,
@@ -50,9 +61,10 @@ public class InvoicesController : ControllerBase
     }
 
     [HttpPost]
-    public async Task<IActionResult> Create(
+    public Task<IActionResult> Create(
         CreateInvoiceRequest request,
         CancellationToken cancellationToken)
+        => WithInvoiceErrors(async () =>
     {
         var invoice = await _invoiceService.CreateAsync(
             request,
@@ -62,5 +74,28 @@ public class InvoicesController : ControllerBase
             nameof(GetById),
             new { id = invoice.Id },
             invoice);
+    });
+
+    private async Task<IActionResult> WithInvoiceErrors(Func<Task<IActionResult>> action)
+    {
+        try { return await action(); }
+        catch (InvoiceValidationException exception)
+        {
+            var result = BadRequest(new ValidationProblemDetails(exception.Errors.ToDictionary())
+            {
+                Status = StatusCodes.Status400BadRequest,
+                Title = exception.Message
+            });
+            result.ContentTypes.Add("application/problem+json");
+            return result;
+        }
+        catch (DocumentNotFoundException exception) { return Problem(statusCode: 404, detail: exception.Message); }
+        catch (InvoiceNotFoundException exception) { return Problem(statusCode: 404, detail: exception.Message); }
+        catch (InvoiceConflictException exception) { return Problem(statusCode: 409, detail: exception.Message); }
+        catch (DbUpdateException exception) when (exception.InnerException is PostgresException
+            { SqlState: PostgresErrorCodes.UniqueViolation, ConstraintName: "IX_Invoices_DocumentId" })
+        {
+            return Problem(statusCode: 409, detail: "An invoice already exists for this document.");
+        }
     }
 }

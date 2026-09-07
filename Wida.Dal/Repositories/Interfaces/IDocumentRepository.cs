@@ -9,6 +9,10 @@ public interface IDocumentRepository
     Task<IReadOnlyList<Document>> GetAllAsync(
         CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyList<Document>> GetWorkspaceAsync(
+        int limit,
+        CancellationToken cancellationToken = default);
+
     Task AddAsync(
         Document document,
         CancellationToken cancellationToken = default);

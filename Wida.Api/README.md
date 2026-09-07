@@ -72,7 +72,7 @@ User Secrets are loaded in Development. Supply deployment values through environ
 
 The web project already has `UserSecretsId` configured, so `dotnet user-secrets init` is unnecessary. Replace any sample Azure endpoint in local Development settings with your resource endpoint. An `appsettings.Local.json` file is not loaded by the current startup code.
 
-Uploads are written beneath `<content-root>/uploads` with generated filenames and the original extension. Metadata records the exact absolute path. If copying or metadata persistence fails, the controller attempts to remove the uploaded file. The process needs write access there; preserve these files along with the database because analysis reads the stored file path. Files are not served by a download endpoint.
+Uploads are written beneath `<content-root>/uploads` with generated filenames and the original extension. Metadata records the exact absolute path. If copying or metadata persistence fails, the controller attempts to remove the uploaded file. The process needs write access there; preserve these files along with the database because analysis reads the stored file path. Original PDF/image files are available through `GET /api/documents/{id}/content`, with range support; add `?download=true` to download. Uploads accept PDF, PNG, JPEG and TIFF up to 20 MiB and verify extension, MIME type and format signature.
 
 ## API endpoints
 
@@ -82,8 +82,12 @@ JSON uses camelCase property names and string enum values such as `Uploaded`, `P
 | --- | --- | --- |
 | GET | `/api/documents` | List document metadata. |
 | GET | `/api/documents/{id}` | Get document metadata; `404` if absent. |
-| POST | `/api/documents` | Upload multipart field `file`; returns `201` with document metadata and a Location header. Empty files return `400`. |
+| GET | `/api/documents/workspace?limit=100` | Latest document summaries with invoice and latest processing run. Limit 1–500, default 100. |
+| GET | `/api/documents/{id}/content` | Inline original PDF/image bytes with ranges; `?download=true` for attachment. |
+| POST | `/api/documents` | Upload multipart field `file`; returns `201` with document metadata and a Location header. Invalid files return structured `400`; files over 20 MiB return `413`. |
 | POST | `/api/invoices` | Create one invoice with optional line items for an existing document; returns `201` and a Location header. |
+| GET | `/api/invoices` | List saved invoices and their lines, newest first. |
+| PUT | `/api/invoices/{id}` | Replace invoice fields/lines using the create request shape and unchanged document ID; returns `200`. |
 | GET | `/api/invoices/{id}` | Get an invoice and its lines; `404` if absent. |
 | GET | `/api/invoices/document/{documentId}` | Get the invoice for a document; `404` if absent. |
 | POST | `/api/processing/documents/{documentId}` | Create a `Pending` run with processor `Manual`, version `v1`; returns `201`, or `404` if the document is absent. This does not start analysis. |
@@ -118,7 +122,7 @@ The analyzer reads the first analyzed document and stores these fields when pres
 
 If the request is canceled after analysis starts, the service attempts to save `Failed` with `DOCUMENT_ANALYSIS_CANCELLED` before propagating cancellation. All terminal saves use a separate 10-second token independent of request cancellation. A database outage, expired persistence timeout, or terminated process can still leave a run `Running`; there is no automatic recovery job.
 
-Analysis does not create an invoice or update the document's type/status. Create the invoice separately using the document ID:
+Analysis sets type `Invoice` and moves an unsaved document through `Processing` to `ReviewRequired` or `Failed`. It does not create an invoice. Create the invoice separately using the document ID; saving sets document status `Saved`:
 
 ```sh
 curl --fail-with-body https://localhost:7127/api/invoices \
@@ -152,7 +156,7 @@ An invoice requires a supplier name, invoice number, invoice date, total amount,
 - If a subtotal and a nonempty set of lines with `lineAmount` on every line are supplied, those line amounts must sum to the subtotal.
 - Amount comparisons allow an absolute difference of `0.01`.
 
-Invoice business-validation failures, missing documents during invoice creation, and duplicate invoices currently throw exceptions without an API exception handler; they are not mapped to structured `400`, `404`, or `409` responses. Both processing creation endpoints return `404` for a missing document.
+Invoice business-validation failures return `400` ValidationProblemDetails with camelCase field paths such as `supplierName` and `lines[0].lineAmount`. Missing documents/invoices return `404`; duplicate invoice creation or an attempt to change a saved invoice's document ID returns `409`. String lengths and four-decimal numeric precision/range are checked before saving. PUT preserves the invoice ID and creation timestamp, replaces all lines with new IDs, and refreshes `updatedAt`. `Saved` means persisted data, not approval. A saved document remains `Saved` during reanalysis even if the new run fails. Both processing creation endpoints return `404` for a missing document.
 
 ## Database migrations
 
@@ -176,10 +180,10 @@ ASPNETCORE_ENVIRONMENT=Development dotnet ef database update --project ../Wida.D
 ## Current limitations
 
 - Processing extracts seven header fields from the first analyzed document. It does not extract line items or process additional analyzed documents in the same file.
-- Processing has no background execution, run-resume endpoint, extracted-field review endpoint, or automatic invoice creation. A repeated analysis request creates a new run. New documents remain `Unknown` / `Uploaded` through these flows.
+- Processing has no background execution, run-resume endpoint, extracted-field review endpoint, or automatic invoice creation. A repeated analysis request creates a new run. Approval/rejection and export are not implemented. The workspace endpoint returns the latest 100 documents by default (up to 500); it does not provide server search or pagination.
 - Existing records with relative or duplicated storage paths are not repaired automatically. Re-upload the documents or explicitly repair their metadata to point to existing files.
 - Filesystem and database writes are not transactional; process termination or unsuccessful cleanup can leave orphan uploads. A failed terminal database save can leave a processing run `Running`.
-- Authentication, authorization, and a CORS policy are not configured. Uploads only explicitly reject empty files; there is no application-specific file type allowlist or size limit configured beyond the server/framework defaults.
+- Authentication, authorization, and a CORS policy are not configured. Separate browser origins need a same-origin proxy or an explicitly configured CORS policy.
 
 ## Troubleshooting
 
@@ -207,7 +211,7 @@ dotnet test Wida.slnx
 
 Use the example workflow or [HTTP request file](wida-api.http) to verify upload, processing status, extracted fields, and invoice creation against your configured database and Azure resource. Run the requests individually and replace their placeholder IDs with IDs returned by the API. Invoice analysis sends the uploaded document to the configured Azure resource.
 
-A manual check should cover upload and retrieval, invoice creation and retrieval by both invoice/document ID, a manual `Pending` run, and an Azure analysis response whose `status` and `extractedFields` are inspected even when HTTP is `201`. Retrieve the analysis run again to confirm its extracted values were persisted.
+A manual check should cover upload, original-file preview/range retrieval, workspace summaries, invoice creation/update/listing and retrieval by both invoice/document ID, a manual `Pending` run, and an Azure analysis response whose `status` and `extractedFields` are inspected even when HTTP is `201`. Retrieve the analysis run again to confirm its extracted values were persisted.
 
 ## Licence
 

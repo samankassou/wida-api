@@ -36,6 +36,28 @@ public class DocumentService : IDocumentService
         return Map(document);
     }
 
+    public async Task<DocumentContent?> GetContentAsync(
+        Guid id,
+        CancellationToken cancellationToken = default)
+    {
+        var document = await _documentRepository.GetByIdAsync(id, cancellationToken);
+        return document is null ? null : new DocumentContent(
+            document.OriginalFileName, document.ContentType, document.StoragePath);
+    }
+
+    public async Task<IReadOnlyList<DocumentWorkspaceResponse>> GetWorkspaceAsync(
+        int limit = 100,
+        CancellationToken cancellationToken = default)
+    {
+        var documents = await _documentRepository.GetWorkspaceAsync(limit, cancellationToken);
+        return documents.Select(document => new DocumentWorkspaceResponse(
+            Map(document),
+            document.Invoice is null ? null : InvoiceService.Map(document.Invoice),
+            document.ProcessingRuns.OrderByDescending(run => run.StartedAt)
+                .ThenByDescending(run => run.Id).FirstOrDefault() is { } run
+                ? ProcessingService.Map(run) : null)).ToList();
+    }
+
     public async Task<DocumentResponse?> GetByIdAsync(
         Guid id,
         CancellationToken cancellationToken = default)

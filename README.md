@@ -13,13 +13,14 @@ Wida is an ASP.NET Core API for uploading documents, recording invoices and line
 
 ## Capabilities
 
-- Upload a document and retrieve its metadata.
-- Create and retrieve one invoice per document, with optional line items.
+- Upload PDF/PNG/JPEG/TIFF files up to 20 MiB, retrieve metadata, and preview/download originals with byte-range support.
+- Load a bounded document workspace with saved invoices and latest extraction runs.
+- Create, update, list, and retrieve one invoice per document, with optional line items and field-specific validation errors.
 - Record a manual processing run or request Azure's `prebuilt-invoice` analysis.
 - Retrieve processing status, extracted fields, confidence scores, and failure information.
 - Explore the API through OpenAPI and Scalar in Development.
 
-Analysis runs during the HTTP request. It records extracted fields but does not create an invoice, extract line items, or update document status. The API currently has no authentication or authorization configured.
+Analysis runs during the HTTP request. It records extracted fields and updates unsaved documents through processing/review/failure states. Saving invoice data sets `Saved`; reanalysis preserves that state. Analysis does not create an invoice or extract line items. Approval and export are not implemented. The API currently has no authentication or authorization configured.
 
 ## Getting started
 

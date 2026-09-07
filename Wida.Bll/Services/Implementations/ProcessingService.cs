@@ -107,6 +107,11 @@ public class ProcessingService : IProcessingService
             StartedAt = DateTime.UtcNow
         };
 
+        var preserveSaved = document.Status == DocumentStatus.Saved;
+        document.DocumentType = DocumentType.Invoice;
+        if (!preserveSaved) document.Status = DocumentStatus.Processing;
+        document.UpdatedAt = DateTime.UtcNow;
+
         await _processingRunRepository.AddAsync(
             processingRun,
             cancellationToken);
@@ -150,18 +155,23 @@ public class ProcessingService : IProcessingService
             processingRun.RawResult = result.RawResult;
             processingRun.Status = ProcessingStatus.Completed;
             processingRun.CompletedAt = DateTime.UtcNow;
+            if (!preserveSaved) document.Status = DocumentStatus.ReviewRequired;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             MarkFailed(processingRun, "DOCUMENT_ANALYSIS_CANCELLED", "Document analysis was cancelled.");
+            if (!preserveSaved) document.Status = DocumentStatus.Failed;
+            document.UpdatedAt = DateTime.UtcNow;
             await SaveTerminalStateAsync();
             throw;
         }
         catch (Exception ex)
         {
             MarkFailed(processingRun, "DOCUMENT_ANALYSIS_FAILED", ex.Message);
+            if (!preserveSaved) document.Status = DocumentStatus.Failed;
         }
 
+        document.UpdatedAt = DateTime.UtcNow;
         await SaveTerminalStateAsync();
 
         return Map(processingRun);
@@ -187,7 +197,7 @@ public class ProcessingService : IProcessingService
         return value is null ? null : JsonSerializer.Deserialize<JsonElement>(value);
     }
 
-    private static ProcessingRunResponse Map(
+    internal static ProcessingRunResponse Map(
         ProcessingRun processingRun)
     {
         return new ProcessingRunResponse(

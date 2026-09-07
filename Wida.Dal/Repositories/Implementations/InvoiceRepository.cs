@@ -25,6 +25,25 @@ public class InvoiceRepository : IInvoiceRepository
                 cancellationToken);
     }
 
+    public async Task<IReadOnlyList<Invoice>> GetAllAsync(CancellationToken cancellationToken = default)
+    {
+        return await _context.Invoices
+            .AsNoTracking()
+            .Include(invoice => invoice.Lines)
+            .OrderByDescending(invoice => invoice.CreatedAt)
+            .ThenBy(invoice => invoice.Id)
+            .AsSplitQuery()
+            .ToListAsync(cancellationToken);
+    }
+
+    public void ReplaceLines(Invoice invoice, IEnumerable<InvoiceLine> lines)
+    {
+        _context.InvoiceLines.RemoveRange(invoice.Lines);
+        invoice.Lines = lines.ToList();
+        // Assigned GUIDs on replacement lines must be inserted, not treated as updates.
+        _context.InvoiceLines.AddRange(invoice.Lines);
+    }
+
     public Task<Invoice?> GetByDocumentIdAsync(
         Guid documentId,
         CancellationToken cancellationToken = default)

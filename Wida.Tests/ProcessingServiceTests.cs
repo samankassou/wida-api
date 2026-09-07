@@ -29,6 +29,7 @@ public class ProcessingServiceTests
             var running = await runningContext.ProcessingRuns.SingleAsync(token);
             Assert.Equal(ProcessingStatus.Running, running.Status);
             Assert.Null(running.CompletedAt);
+            Assert.Equal(DocumentStatus.Processing, (await runningContext.Documents.SingleAsync(token)).Status);
 
             return new DocumentAnalysisResult
             {
@@ -55,6 +56,9 @@ public class ProcessingServiceTests
         Assert.Equal(ProcessingStatus.Completed, saved.Status);
         Assert.Equal("{\"modelId\":\"prebuilt-invoice\"}", saved.RawResult);
         Assert.Equal(4, await persistedContext.ExtractedFields.CountAsync());
+        var document = await persistedContext.Documents.SingleAsync();
+        Assert.Equal(DocumentStatus.ReviewRequired, document.Status);
+        Assert.Equal(DocumentType.Invoice, document.DocumentType);
         Assert.All(saved.ExtractedFields, field => Assert.Equal(saved.Id, field.ProcessingRunId));
 
         var reader = new ProcessingService(new ProcessingRunRepository(persistedContext),
@@ -90,6 +94,7 @@ public class ProcessingServiceTests
         Assert.Empty(response.ExtractedFields);
         await using var persistedContext = fixture.OpenContext();
         Assert.Equal(ProcessingStatus.Failed, (await persistedContext.ProcessingRuns.SingleAsync()).Status);
+        Assert.Equal(DocumentStatus.Failed, (await persistedContext.Documents.SingleAsync()).Status);
     }
 
     [Fact]
@@ -174,6 +179,29 @@ public class ProcessingServiceTests
         Assert.Equal(ProcessingStatus.Failed, analysis.Status);
         Assert.Equal("DOCUMENT_ANALYSIS_FAILED", analysis.ErrorCode);
         Assert.Contains("endpoint", analysis.ErrorMessage!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Reanalysis_preserves_a_saved_invoice_document(bool fail)
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        fixture.Document.Status = DocumentStatus.Saved;
+        fixture.Document.DocumentType = DocumentType.Invoice;
+        await fixture.Context.SaveChangesAsync();
+        var service = fixture.Service(new StubAnalyzer(async (_, token) =>
+        {
+            await using var read = fixture.OpenContext();
+            Assert.Equal(DocumentStatus.Saved, (await read.Documents.SingleAsync(token)).Status);
+            if (fail) throw new IOException("Analysis unavailable.");
+            return new DocumentAnalysisResult { RawResult = "{}" };
+        }));
+
+        var result = await service.ProcessInvoiceAsync(fixture.Document.Id);
+        Assert.Equal(fail ? ProcessingStatus.Failed : ProcessingStatus.Completed, result.Status);
+        await using var persisted = fixture.OpenContext();
+        Assert.Equal(DocumentStatus.Saved, (await persisted.Documents.SingleAsync()).Status);
     }
 
     private static AnalyzedField Field(string name, object value, decimal? confidence) => new()

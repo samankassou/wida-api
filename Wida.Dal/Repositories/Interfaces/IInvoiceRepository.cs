@@ -4,6 +4,10 @@ namespace Wida.Dal.Repositories.Interfaces;
 
 public interface IInvoiceRepository
 {
+    Task<IReadOnlyList<Invoice>> GetAllAsync(CancellationToken cancellationToken = default);
+
+    void ReplaceLines(Invoice invoice, IEnumerable<InvoiceLine> lines);
+
     Task<Invoice?> GetByIdAsync(
         Guid id,
         CancellationToken cancellationToken = default);
