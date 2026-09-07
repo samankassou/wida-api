@@ -1,4 +1,4 @@
-# Run requests individually after following README.md and resolving its known issues.
+# Run requests individually after following README.md.
 # Replace the IDs with values returned by your own requests.
 # The all-zero GUIDs below are placeholders, not seeded records.
 @wida_api_HostAddress = https://localhost:7127
@@ -62,17 +62,18 @@ Accept: application/json
 GET {{wida_api_HostAddress}}/api/invoices/document/{{documentId}}
 Accept: application/json
 
-### Create a manual Pending run (does not start analysis; requires Azure settings)
+### Create a manual Pending run (does not start analysis; no Azure settings required)
 POST {{wida_api_HostAddress}}/api/processing/documents/{{documentId}}
 Accept: application/json
 
 ### Analyze an invoice with Azure Document Intelligence
 # Sends the stored document to Azure and waits for analysis during the request.
 # Creates a new run. Inspect status even on HTTP 201: it can be Failed.
+# Requires Azure endpoint/key. Results include extractedFields and review flags.
 POST {{wida_api_HostAddress}}/api/processing/documents/{{documentId}}/invoice
 Accept: application/json
 
-### Get a processing run (copy a processing response id into processingRunId)
+### Get a processing run and extracted fields (copy a response id into processingRunId)
 GET {{wida_api_HostAddress}}/api/processing/{{processingRunId}}
 Accept: application/json
 

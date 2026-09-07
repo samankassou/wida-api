@@ -4,6 +4,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Wida.Dal.Persistence;
 using Wida.Dal.Repositories.Implementations;
 using Wida.Dal.Repositories.Interfaces;
+using Wida.Dal.Services;
+using Wida.Dal.Services.Interfaces;
 
 namespace Wida.Dal;
 
@@ -22,6 +24,7 @@ public static class DependencyInjection
         services.AddScoped<IDocumentRepository, DocumentRepository>();
         services.AddScoped<IInvoiceRepository, InvoiceRepository>();
         services.AddScoped<IProcessingRunRepository, ProcessingRunRepository>();
+        services.AddScoped<IDocumentAnalyzer, AzureDocumentAnalyzer>();
 
         return services;
     }

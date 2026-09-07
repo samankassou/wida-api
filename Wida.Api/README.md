@@ -2,15 +2,14 @@
 
 [Project overview](../README.md) · [API reference](../docs/api.md) · [Architecture](../docs/architecture.md) · [MIT licence](../LICENSE)
 
-.NET 10 API for uploading documents, storing invoices and their line items, and tracking document processing. Data is stored in PostgreSQL through Entity Framework Core; uploaded files are stored on the API filesystem. The Azure Document Intelligence integration under development uses `prebuilt-invoice`.
+.NET 10 API for uploading documents, storing invoices and their line items, and tracking document processing. Data is stored in PostgreSQL through Entity Framework Core; uploaded files are stored on the API filesystem. Azure Document Intelligence's `prebuilt-invoice` model extracts selected invoice header fields.
 
 ## Project structure
 
 - `Wida.Api`: controllers, application startup, configuration, and OpenAPI/Scalar.
-- `Wida.Bll`: services, request/response DTOs, invoice validation, and document analysis contracts.
-- `Wida.Dal`: entities, EF configurations and migrations, repositories, and the Azure analyzer implementation.
-
-See [current limitations](#current-limitations) before running the current working tree, which contains an unfinished Azure integration.
+- `Wida.Bll`: services, request/response DTOs, and invoice validation.
+- `Wida.Dal`: entities, EF configurations and migrations, repositories, analysis contracts/models, and the Azure analyzer implementation.
+- `Wida.Tests`: automated regression tests with Azure response fixtures and an in-memory database.
 
 ## Local setup
 
@@ -22,7 +21,7 @@ Run the following commands from the `Wida.Api` directory. From the repository ro
 cd Wida.Api
 ```
 
-The examples use a POSIX shell, such as Bash or Zsh. The current [build blocker](#current-limitations) must be resolved before migrations or application startup can succeed.
+The examples use a POSIX shell, such as Bash or Zsh.
 
 1. Create a PostgreSQL database named `wida` with a login that can manage its tables, or use an existing database and login.
 2. Configure the connection with .NET User Secrets:
@@ -31,14 +30,14 @@ The examples use a POSIX shell, such as Bash or Zsh. The current [build blocker]
    dotnet user-secrets set "ConnectionStrings:DefaultConnection" "Host=localhost;Port=5432;Database=wida;Username=wida;Password=YOUR_LOCAL_PASSWORD"
    ```
 
-3. Configure the Azure analyzer:
+3. Configure the Azure analyzer if you want to analyze invoices:
 
    ```sh
    dotnet user-secrets set "AzureDocumentIntelligence:Endpoint" "https://YOUR_RESOURCE.cognitiveservices.azure.com/"
    dotnet user-secrets set "AzureDocumentIntelligence:Key" "YOUR_API_KEY"
    ```
 
-   The analyzer is injected into the processing service, so these settings are currently needed for every processing endpoint, including reads and manual run creation. Document and invoice endpoints do not require the analyzer.
+   These settings are only needed for invoice analysis. Reading processing runs and creating manual runs work without Azure settings, as do document and invoice endpoints. Missing or invalid Azure settings during analysis produce a persisted `Failed` run when the database save succeeds.
 
 4. Restore dependencies and apply all database migrations:
 
@@ -68,12 +67,12 @@ User Secrets are loaded in Development. Supply deployment values through environ
 | Configuration key | Environment variable | Purpose |
 | --- | --- | --- |
 | `ConnectionStrings:DefaultConnection` | `ConnectionStrings__DefaultConnection` | PostgreSQL connection; required at startup. |
-| `AzureDocumentIntelligence:Endpoint` | `AzureDocumentIntelligence__Endpoint` | Azure resource endpoint; required when resolving the processing service. |
-| `AzureDocumentIntelligence:Key` | `AzureDocumentIntelligence__Key` | Azure API key; required when resolving the processing service. |
+| `AzureDocumentIntelligence:Endpoint` | `AzureDocumentIntelligence__Endpoint` | Azure resource endpoint; required for invoice analysis. |
+| `AzureDocumentIntelligence:Key` | `AzureDocumentIntelligence__Key` | Azure API key; required for invoice analysis. |
 
 The web project already has `UserSecretsId` configured, so `dotnet user-secrets init` is unnecessary. Replace any sample Azure endpoint in local Development settings with your resource endpoint. An `appsettings.Local.json` file is not loaded by the current startup code.
 
-Uploads are written beneath `<content-root>/uploads` with generated filenames and the original extension. The process needs write access there; preserve these files along with the database because analysis reads the stored file path. Files are not served by a download endpoint.
+Uploads are written beneath `<content-root>/uploads` with generated filenames and the original extension. Metadata records the exact absolute path. If copying or metadata persistence fails, the controller attempts to remove the uploaded file. The process needs write access there; preserve these files along with the database because analysis reads the stored file path. Files are not served by a download endpoint.
 
 ## API endpoints
 
@@ -87,16 +86,16 @@ JSON uses camelCase property names and string enum values such as `Uploaded`, `P
 | POST | `/api/invoices` | Create one invoice with optional line items for an existing document; returns `201` and a Location header. |
 | GET | `/api/invoices/{id}` | Get an invoice and its lines; `404` if absent. |
 | GET | `/api/invoices/document/{documentId}` | Get the invoice for a document; `404` if absent. |
-| POST | `/api/processing/documents/{documentId}` | Create a `Pending` run with processor `Manual`, version `v1`; returns `201`. This does not start analysis. |
-| POST | `/api/processing/documents/{documentId}/invoice` | Run Azure invoice analysis during the request and return the run with `201`. |
-| GET | `/api/processing/{id}` | Get processing run metadata; `404` if absent. |
+| POST | `/api/processing/documents/{documentId}` | Create a `Pending` run with processor `Manual`, version `v1`; returns `201`, or `404` if the document is absent. This does not start analysis. |
+| POST | `/api/processing/documents/{documentId}/invoice` | Run Azure invoice analysis during the request and return the run with `201`, or `404` if the document is absent. |
+| GET | `/api/processing/{id}` | Get a processing run and extracted fields; `404` if absent. |
 | GET | `/api/processing/documents/{documentId}` | List processing runs for a document; returns an empty list if none exist. |
 
-All route IDs are GUIDs. Processing responses contain `id`, `documentId`, `status`, `processor`, `processorVersion`, `startedAt`, `completedAt`, `errorCode`, and `errorMessage`.
+All route IDs are GUIDs. Processing responses contain `id`, `documentId`, `status`, `processor`, `processorVersion`, `startedAt`, `completedAt`, `errorCode`, `errorMessage`, and `extractedFields`. Each extracted field includes its raw and normalized values, confidence, source, available page/bounding data, and review flag; see the [response contract](../docs/api.md#processing-response).
 
 ## Example workflow
 
-After setup and resolving the integration issues below, upload a document:
+After setup, upload a document:
 
 ```sh
 curl --fail-with-body https://localhost:7127/api/documents \
@@ -113,9 +112,11 @@ curl --fail-with-body \
   "https://localhost:7127/api/processing/documents/$DOCUMENT_ID"
 ```
 
-Analysis waits for Azure to finish; there is no background worker. A run is saved as `Running`, then updated to `Completed` or `Failed`. Caught analysis errors set `errorCode` to `DOCUMENT_ANALYSIS_FAILED` and include an error message. A failed analysis can still return HTTP `201`, so inspect the response `status`.
+Analysis waits for Azure to finish; there is no background worker. A run is saved as `Running`, then updated to `Completed` or `Failed`. Caught analysis errors set `errorCode` to `DOCUMENT_ANALYSIS_FAILED` and include an error message capped at 2,000 characters. A failed analysis can still return HTTP `201`, so inspect the response `status`.
 
-The analyzer reads the first analyzed document and stores these fields when present: `InvoiceId`, `InvoiceDate`, `DueDate`, `VendorName`, `SubTotal`, `TotalTax`, and `InvoiceTotal`. Fields with missing confidence or confidence below `0.80` are marked `RequiresReview`. Raw analysis and extracted fields are persisted, but are not included in the processing response or exposed by a separate endpoint. Line items are not extracted by the current implementation.
+The analyzer reads the first analyzed document and stores these fields when present: `InvoiceId`, `InvoiceDate`, `DueDate`, `VendorName`, `SubTotal`, `TotalTax`, and `InvoiceTotal`. An Azure response with no analyzed documents fails the run. Fields with missing confidence or confidence below `0.80` have `requiresReview: true`. Processing responses include extracted fields with typed normalized JSON values and the first bounding region's page number and polygon, when available. Raw analysis is persisted internally. Line items are not extracted.
+
+If the request is canceled after analysis starts, the service attempts to save `Failed` with `DOCUMENT_ANALYSIS_CANCELLED` before propagating cancellation. All terminal saves use a separate 10-second token independent of request cancellation. A database outage, expired persistence timeout, or terminated process can still leave a run `Running`; there is no automatic recovery job.
 
 Analysis does not create an invoice or update the document's type/status. Create the invoice separately using the document ID:
 
@@ -151,7 +152,7 @@ An invoice requires a supplier name, invoice number, invoice date, total amount,
 - If a subtotal and a nonempty set of lines with `lineAmount` on every line are supplied, those line amounts must sum to the subtotal.
 - Amount comparisons allow an absolute difference of `0.01`.
 
-Business validation failures, missing documents during creation/processing, and duplicate invoices currently throw exceptions without an API exception handler; they are not mapped to structured `400`, `404`, or `409` responses.
+Invoice business-validation failures, missing documents during invoice creation, and duplicate invoices currently throw exceptions without an API exception handler; they are not mapped to structured `400`, `404`, or `409` responses. Both processing creation endpoints return `404` for a missing document.
 
 ## Database migrations
 
@@ -174,21 +175,22 @@ ASPNETCORE_ENVIRONMENT=Development dotnet ef database update --project ../Wida.D
 
 ## Current limitations
 
-- The Azure analyzer and DAL dependency registration reference `Wida.Bll` types, but `Wida.Dal` has no project reference to `Wida.Bll`. Since BLL already references DAL, adding the reverse reference would introduce a cycle. The analysis contracts need an appropriate shared location before the integration can build.
-- Source inspection also shows an Azure SDK mismatch: field normalization calls `field.Value.AsString()` and similar methods, while the referenced Azure Document Intelligence SDK `1.0.0` exposes typed properties such as `ValueString`, `ValueDate`, `ValueCurrency`, and `ValueDouble`.
-- Upload currently saves `StoragePath` by appending the generated filename to `physicalPath`, which already includes that filename. This produces an invalid analysis path and needs correction before newly uploaded documents can be analyzed.
-- Processing has no background execution, retry endpoint, extracted-field review endpoint, or automatic invoice creation. New documents remain `Unknown` / `Uploaded` through these flows.
+- Processing extracts seven header fields from the first analyzed document. It does not extract line items or process additional analyzed documents in the same file.
+- Processing has no background execution, run-resume endpoint, extracted-field review endpoint, or automatic invoice creation. A repeated analysis request creates a new run. New documents remain `Unknown` / `Uploaded` through these flows.
+- Existing records with relative or duplicated storage paths are not repaired automatically. Re-upload the documents or explicitly repair their metadata to point to existing files.
+- Filesystem and database writes are not transactional; process termination or unsuccessful cleanup can leave orphan uploads. A failed terminal database save can leave a processing run `Running`.
 - Authentication, authorization, and a CORS policy are not configured. Uploads only explicitly reject empty files; there is no application-specific file type allowlist or size limit configured beyond the server/framework defaults.
 
 ## Troubleshooting
 
 | Symptom | Check |
 | --- | --- |
-| Build cannot resolve `Wida.Bll` types in DAL | See the existing project dependency issue above; configuration changes cannot resolve it. |
 | Startup asks for `ConnectionStrings:DefaultConnection` | Set the secret from `Wida.Api`, or supply `ConnectionStrings__DefaultConnection` in the process environment. |
 | Tables do not exist | Apply the committed migrations against the configured database; startup does not apply them. |
-| Processing reports a missing Azure endpoint or key | Set both analyzer settings, including when only reading runs or creating a manual run. |
-| Upload succeeds but analysis cannot read the file | Check the duplicated filename in the current persisted `StoragePath` implementation and read access to the stored file. |
+| Analysis reports a missing Azure endpoint or key | Set both analyzer settings; reading runs and creating manual runs do not require them. |
+| Analysis cannot read the file | Check file existence and read access at its stored path. Re-upload or repair metadata for historical records with relative or duplicated paths. |
+| Analysis returns `201` but the run is `Failed` | Inspect `errorCode` and `errorMessage`; `201` confirms that a run was created, including a failed analysis. |
+| A run remains `Running` after interruption | Check API and database availability. There is no reconciliation job; retrying analysis creates a new run. |
 | Scalar or OpenAPI returns `404` | Use the Development environment, as set by the supplied launch profiles. |
 | HTTPS certificate is not trusted locally | Run `dotnet dev-certs https --trust` and use the supplied HTTPS launch profile. |
 
@@ -198,11 +200,14 @@ From the repository root:
 
 ```sh
 dotnet build Wida.slnx
+dotnet test Wida.slnx
 ```
 
-No automated test project is currently included. Once the integration builds, use the example workflow or [HTTP request file](wida-api.http) to check upload, processing status, and invoice creation against a configured database and Azure resource. Run the requests individually and replace their placeholder IDs with IDs returned by the API. Invoice analysis sends the uploaded document to the configured Azure resource.
+`Wida.Tests` uses Azure response fixtures and an in-memory database to exercise the workflow without a live Azure resource or PostgreSQL instance. These tests do not establish that your resource credentials, database connection, or production database behavior are working.
 
-A manual check should cover upload and retrieval, invoice creation and retrieval by both invoice/document ID, a manual `Pending` run, and an Azure analysis response whose `status` is inspected even when HTTP is `201`.
+Use the example workflow or [HTTP request file](wida-api.http) to verify upload, processing status, extracted fields, and invoice creation against your configured database and Azure resource. Run the requests individually and replace their placeholder IDs with IDs returned by the API. Invoice analysis sends the uploaded document to the configured Azure resource.
+
+A manual check should cover upload and retrieval, invoice creation and retrieval by both invoice/document ID, a manual `Pending` run, and an Azure analysis response whose `status` and `extractedFields` are inspected even when HTTP is `201`. Retrieve the analysis run again to confirm its extracted values were persisted.
 
 ## Licence
 

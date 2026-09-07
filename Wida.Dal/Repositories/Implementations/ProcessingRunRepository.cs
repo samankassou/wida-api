@@ -50,4 +50,11 @@ public class ProcessingRunRepository : IProcessingRunRepository
     {
         return _context.SaveChangesAsync(cancellationToken);
     }
+
+    public void AddExtractedFields(IEnumerable<ExtractedField> extractedFields)
+    {
+        // These fields have application-assigned IDs and belong to an already saved run.
+        // Explicitly mark them Added so EF does not infer that they already exist.
+        _context.ExtractedFields.AddRange(extractedFields);
+    }
 }

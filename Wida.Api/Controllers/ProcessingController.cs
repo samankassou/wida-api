@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Wida.Bll.Exceptions;
 using Wida.Bll.Services.Interfaces;
 
 namespace Wida.Api.Controllers;
@@ -20,16 +21,20 @@ public class ProcessingController : ControllerBase
         Guid documentId,
         CancellationToken cancellationToken)
     {
-        var run = await _processingService.CreateAsync(
-            documentId,
-            processor: "Manual",
-            processorVersion: "v1",
-            cancellationToken);
+        try
+        {
+            var run = await _processingService.CreateAsync(
+                documentId,
+                processor: "Manual",
+                processorVersion: "v1",
+                cancellationToken);
 
-        return CreatedAtAction(
-            nameof(GetById),
-            new { id = run.Id },
-            run);
+            return CreatedAtAction(nameof(GetById), new { id = run.Id }, run);
+        }
+        catch (DocumentNotFoundException ex)
+        {
+            return Problem(statusCode: StatusCodes.Status404NotFound, detail: ex.Message);
+        }
     }
 
     [HttpGet("{id:guid}")]
@@ -59,5 +64,24 @@ public class ProcessingController : ControllerBase
             cancellationToken);
 
         return Ok(runs);
+    }
+
+    [HttpPost("documents/{documentId:guid}/invoice")]
+    public async Task<IActionResult> ProcessInvoice(
+        Guid documentId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var run = await _processingService.ProcessInvoiceAsync(
+                documentId,
+                cancellationToken);
+
+            return CreatedAtAction(nameof(GetById), new { id = run.Id }, run);
+        }
+        catch (DocumentNotFoundException ex)
+        {
+            return Problem(statusCode: StatusCodes.Status404NotFound, detail: ex.Message);
+        }
     }
 }

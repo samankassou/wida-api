@@ -2,8 +2,6 @@
 
 Wida is an ASP.NET Core API for uploading documents, recording invoices and line items, and tracking invoice analysis with Azure Document Intelligence. It targets .NET 10, stores application data in PostgreSQL through Entity Framework Core, and saves uploaded files on the API filesystem.
 
-The current Azure integration is unfinished: DAL references analysis contracts in BLL without a project reference, which blocks compilation, and uploads persist an incorrect analysis file path. See the [known issues](Wida.Api/README.md#current-limitations) before following the setup or request examples.
-
 ## Documentation
 
 | Guide | Contents |
@@ -18,24 +16,25 @@ The current Azure integration is unfinished: DAL references analysis contracts i
 - Upload a document and retrieve its metadata.
 - Create and retrieve one invoice per document, with optional line items.
 - Record a manual processing run or request Azure's `prebuilt-invoice` analysis.
-- Retrieve processing status and failure information.
+- Retrieve processing status, extracted fields, confidence scores, and failure information.
 - Explore the API through OpenAPI and Scalar in Development.
 
 Analysis runs during the HTTP request. It records extracted fields but does not create an invoice, extract line items, or update document status. The API currently has no authentication or authorization configured.
 
 ## Getting started
 
-You need the .NET 10 SDK and a PostgreSQL database. Processing endpoints also require an Azure Document Intelligence endpoint and API key. Follow the [local setup guide](Wida.Api/README.md#local-setup) to configure User Secrets, restore dependencies, apply migrations, and start the HTTPS profile.
+You need the .NET 10 SDK and a PostgreSQL database. Invoice analysis also requires an Azure Document Intelligence endpoint and API key; reading processing runs and creating manual runs do not. Follow the [local setup guide](Wida.Api/README.md#local-setup) to configure User Secrets, restore dependencies, apply migrations, and start the HTTPS profile.
 
 The development HTTPS address is `https://localhost:7127`. Once the application is running, use [Scalar](https://localhost:7127/scalar/v1) or the [request examples](Wida.Api/wida-api.http).
 
-To check compilation from the repository root:
+To build and run the automated tests from the repository root:
 
 ```sh
 dotnet build Wida.slnx
+dotnet test Wida.slnx
 ```
 
-There is no automated test project in the solution. The [build check](Wida.Api/README.md#build-check) describes the current build blocker and manual verification steps.
+`Wida.Tests` exercises the analysis workflow with Azure response fixtures and an in-memory database. The [build check](Wida.Api/README.md#build-check) also describes verification against your own PostgreSQL database and Azure resource.
 
 ## Licence
 

@@ -4,17 +4,18 @@
 
 ## Projects and dependencies
 
-The solution contains three .NET 10 projects:
+The solution contains three application projects and an automated test project, all targeting .NET 10:
 
 | Project | Responsibility | Main entry points |
 | --- | --- | --- |
 | `Wida.Api` | HTTP routing, upload file storage, JSON serialization, configuration, and OpenAPI/Scalar. | [Program.cs](../Wida.Api/Program.cs), [controllers](../Wida.Api/Controllers) |
-| `Wida.Bll` | Document, invoice, and processing workflows; DTO mapping; invoice validation; analysis contracts. | [services](../Wida.Bll/Services), [DTOs](../Wida.Bll/Dtos), [InvoiceValidator](../Wida.Bll/Validators/InvoiceValidator.cs) |
-| `Wida.Dal` | EF Core entities, PostgreSQL mappings and migrations, repositories, and the Azure analyzer. | [WidaDbContext](../Wida.Dal/Persistence/WidaDbContext.cs), [repositories](../Wida.Dal/Repositories), [AzureDocumentAnalyzer](../Wida.Dal/Services/AzureDocumentAnalyzer.cs) |
+| `Wida.Bll` | Document, invoice, and processing workflows; DTO mapping; invoice validation. | [services](../Wida.Bll/Services), [DTOs](../Wida.Bll/Dtos), [InvoiceValidator](../Wida.Bll/Validators/InvoiceValidator.cs) |
+| `Wida.Dal` | EF Core entities, PostgreSQL mappings and migrations, repositories, analysis contracts/models, and the Azure analyzer. | [WidaDbContext](../Wida.Dal/Persistence/WidaDbContext.cs), [repositories](../Wida.Dal/Repositories), [AzureDocumentAnalyzer](../Wida.Dal/Services/AzureDocumentAnalyzer.cs) |
+| `Wida.Tests` | Automated workflow and extraction regression tests using Azure response fixtures and an in-memory database. | [tests](../Wida.Tests) |
 
 Declared project references are `Wida.Api → Wida.Bll`, `Wida.Api → Wida.Dal`, and `Wida.Bll → Wida.Dal`. Startup calls `AddDal(configuration)` and `AddBll()` to register the database context, repositories, analyzer, and services with scoped lifetimes.
 
-The current analyzer implementation and DAL registration import `IDocumentAnalyzer` and analysis models from BLL. DAL has no reference to that project, so these types cannot resolve. Adding a reverse project reference would create a cycle; the contracts need a shared location or the implementation/registration needs to move. This is an existing integration issue, not an additional dependency to install.
+`IDocumentAnalyzer` lives in DAL's `Services/Interfaces`, with analysis models in DAL's `Models`. BLL consumes these contracts through its existing DAL reference; DAL has no reverse dependency on BLL. The Azure adapter uses the typed field properties supplied by the referenced Azure Document Intelligence SDK.
 
 ## Request flows
 
@@ -22,7 +23,7 @@ The current analyzer implementation and DAL registration import `IDocumentAnalyz
 
 `DocumentsController` writes the multipart `file` to `<content-root>/uploads/<generated-guid><original-extension>`. `DocumentService` creates metadata with document type `Unknown` and status `Uploaded`; `DocumentRepository` saves it to PostgreSQL. The response excludes the physical path and file bytes.
 
-The current controller appends the generated filename twice when computing the database `StoragePath`, although the file itself is written to the correct location. Subsequent analysis uses the persisted path and fails for these uploads. Filesystem writes and metadata persistence do not share a transaction, so a failed metadata save can leave a file without a database record.
+The controller persists the exact absolute path of the written file. If copying the upload or saving its metadata fails, it attempts to delete the file before propagating the failure. Filesystem and database writes still do not share a transaction, so process termination or failed cleanup can leave an orphan file. Historical records with relative or duplicated paths are not rewritten automatically; re-upload those documents or explicitly repair their metadata to point to the existing files.
 
 ### Invoice creation
 
@@ -34,11 +35,11 @@ Invoice creation is independent of processing runs and does not change the docum
 
 The manual endpoint only inserts a `Pending` run with processor `Manual` and version `v1`. It does not queue work or transition that run later.
 
-The invoice-analysis endpoint creates a separate `Running` run, saves it, reads the stored file, and waits for Azure's `prebuilt-invoice` analysis. The first analyzed document supplies selected invoice header fields. The service stores raw analysis and extracted fields, marks low-confidence or unscored fields for review, and completes the run. Caught analysis failures set the run to `Failed` with `DOCUMENT_ANALYSIS_FAILED`; the controller still returns `201` if saving that result succeeds.
+The invoice-analysis endpoint creates a separate `Running` run, saves it, reads the stored file, and waits for Azure's `prebuilt-invoice` analysis. The first analyzed document supplies seven selected invoice header fields when present: `InvoiceId`, `InvoiceDate`, `DueDate`, `VendorName`, `SubTotal`, `TotalTax`, and `InvoiceTotal`. A response without any analyzed documents fails the run. The service stores raw analysis and extracted fields, marks fields with confidence below `0.80` or no confidence for review, and completes the run. Processing responses expose extracted fields; raw analysis remains internal. The repository explicitly adds new extracted fields so their application-assigned GUIDs are inserted after the run's initial save.
 
-Initial and final database saves are outside the analysis exception handler. A failed final save or interrupted request can leave a stored run as `Running`. There is no background worker or reconciliation job. A new analysis request creates a new run.
+Caught analysis failures set the run to `Failed` with `DOCUMENT_ANALYSIS_FAILED` and an error message limited to 2,000 characters. The controller still returns `201` if saving that result succeeds. Request cancellation after a run starts sets `Failed` with `DOCUMENT_ANALYSIS_CANCELLED`; cancellation is propagated after attempting to persist the terminal state. Terminal persistence uses a separate 10-second cancellation token so an aborted request does not itself prevent the save. Database failure, expiration of that persistence timeout, or process termination can still leave a stored run as `Running`. There is no background worker or reconciliation job. A new analysis request creates a new run.
 
-The processing service requires `IDocumentAnalyzer` in its constructor. Consequently, every processing route requires Azure configuration, including list/read requests and manual run creation.
+The processing controller maps a typed missing-document exception to `404` for both creation endpoints. The analyzer creates its Azure client only when analysis is requested, so listing/reading runs and creating manual runs work without Azure configuration. Missing or invalid Azure settings during analysis are recorded as analysis failures.
 
 ## Data model
 
@@ -60,7 +61,7 @@ All entity primary keys are application-generated GUIDs. Document, invoice, and 
 | `ProcessingRun` | Processor/version, status, timestamps, error details, raw result, and document ID. |
 | `ExtractedField` | Name, raw/normalized values, confidence, source, review flag, optional page/bounding data, and processing run ID. |
 
-EF configurations are discovered through `ApplyConfigurationsFromAssembly`. Amounts and quantities use precision `(18, 4)`, line tax rates `(8, 4)`, and extraction confidence `(5, 4)`. `RawResult`, `NormalizedValue`, and `BoundingBox` use PostgreSQL `jsonb`. The current normalized value is serialized from a string, so a `jsonb` value may contain a JSON string rather than a typed number or object. The analyzer currently leaves page numbers and bounding boxes unset.
+EF configurations are discovered through `ApplyConfigurationsFromAssembly`. Amounts and quantities use precision `(18, 4)`, line tax rates `(8, 4)`, and extraction confidence `(5, 4)`. `RawResult`, `NormalizedValue`, and `BoundingBox` use PostgreSQL `jsonb`. Normalized values retain their JSON types: strings and date strings, numbers, or currency objects. Processing DTOs expose normalized values and bounding data as JSON values rather than strings containing JSON. When Azure supplies bounding regions, the analyzer stores the first region's page number and polygon.
 
 Migrations are committed in [Wida.Dal/Migrations](../Wida.Dal/Migrations) and applied explicitly with the commands in the [setup guide](../Wida.Api/README.md#database-migrations). Startup does not migrate or seed the database.
 
@@ -68,6 +69,6 @@ Migrations are committed in [Wida.Dal/Migrations](../Wida.Dal/Migrations) and ap
 
 `Program.cs` requires `ConnectionStrings:DefaultConnection` before building the app. User Secrets support local Development configuration; deployment settings can use environment variables. The analyzer uses an endpoint and API key through `AzureKeyCredential`.
 
-Uploaded files must remain accessible at their recorded filesystem paths. Preserve the upload directory together with the database; moving the content root or running instances with separate filesystems requires accounting for these paths. Uploads have no download endpoint, and raw/extracted analysis data has no public retrieval endpoint.
+Uploaded files must remain accessible at their recorded filesystem paths. Preserve the upload directory together with the database; moving the content root or running instances with separate filesystems requires accounting for these paths. Uploads have no download endpoint. Extracted fields are available in processing responses; raw analysis has no public retrieval endpoint.
 
 OpenAPI and Scalar routes are mapped only in Development, and HTTPS redirection is enabled. Startup currently configures no authentication, authorization, CORS policy, global exception handler, background processing, or health-check endpoint.

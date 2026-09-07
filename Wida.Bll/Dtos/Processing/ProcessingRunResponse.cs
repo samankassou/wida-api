@@ -11,5 +11,6 @@ public record ProcessingRunResponse(
     DateTime StartedAt,
     DateTime? CompletedAt,
     string? ErrorCode,
-    string? ErrorMessage
+    string? ErrorMessage,
+    IReadOnlyList<ExtractedFieldResponse> ExtractedFields
 );

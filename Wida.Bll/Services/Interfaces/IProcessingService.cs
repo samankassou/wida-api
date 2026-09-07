@@ -17,4 +17,8 @@ public interface IProcessingService
     Task<IReadOnlyList<ProcessingRunResponse>> GetByDocumentIdAsync(
         Guid documentId,
         CancellationToken cancellationToken = default);
+
+    Task<ProcessingRunResponse> ProcessInvoiceAsync(
+        Guid documentId,
+        CancellationToken cancellationToken = default);
 }

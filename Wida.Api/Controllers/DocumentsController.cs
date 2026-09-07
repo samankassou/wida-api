@@ -67,24 +67,28 @@ public class DocumentsController : ControllerBase
             uploadsPath,
             storedFileName);
 
-        await using (var stream = System.IO.File.Create(physicalPath))
+        try
         {
-            await file.CopyToAsync(stream, cancellationToken);
+            await using (var stream = System.IO.File.Create(physicalPath))
+            {
+                await file.CopyToAsync(stream, cancellationToken);
+            }
+
+            var document = await _documentService.CreateAsync(
+                file.FileName,
+                file.ContentType,
+                physicalPath,
+                cancellationToken);
+
+            return CreatedAtAction(
+                nameof(GetById),
+                new { id = document.Id },
+                document);
         }
-
-        var storagePath = Path.Combine(
-            "uploads",
-            storedFileName);
-
-        var document = await _documentService.CreateAsync(
-            file.FileName,
-            file.ContentType,
-            storagePath,
-            cancellationToken);
-
-        return CreatedAtAction(
-            nameof(GetById),
-            new { id = document.Id },
-            document);
+        catch
+        {
+            System.IO.File.Delete(physicalPath);
+            throw;
+        }
     }
 }

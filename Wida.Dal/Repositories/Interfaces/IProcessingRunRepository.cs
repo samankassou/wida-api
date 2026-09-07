@@ -18,4 +18,6 @@ public interface IProcessingRunRepository
 
     Task SaveChangesAsync(
         CancellationToken cancellationToken = default);
+
+    void AddExtractedFields(IEnumerable<ExtractedField> extractedFields);
 }
