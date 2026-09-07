@@ -1,6 +1,81 @@
-@wida_api_HostAddress = http://localhost:5085
+# Run requests individually after following README.md and resolving its known issues.
+# Replace the IDs with values returned by your own requests.
+# The all-zero GUIDs below are placeholders, not seeded records.
+@wida_api_HostAddress = https://localhost:7127
+@documentId = 00000000-0000-0000-0000-000000000000
+@invoiceId = 00000000-0000-0000-0000-000000000000
+@processingRunId = 00000000-0000-0000-0000-000000000000
 
-GET {{wida_api_HostAddress}}/weatherforecast/
+### List documents
+GET {{wida_api_HostAddress}}/api/documents
 Accept: application/json
 
-###
+### Upload a document
+# Replace the path below with an existing local file before sending.
+# Multipart file inclusion requires an HTTP client that supports the '< path' syntax.
+POST {{wida_api_HostAddress}}/api/documents
+Accept: application/json
+Content-Type: multipart/form-data; boundary=WidaDocumentBoundary
+
+--WidaDocumentBoundary
+Content-Disposition: form-data; name="file"; filename="invoice.pdf"
+Content-Type: application/pdf
+
+< /absolute/path/invoice.pdf
+--WidaDocumentBoundary--
+
+### Get document metadata (copy the upload response id into documentId)
+GET {{wida_api_HostAddress}}/api/documents/{{documentId}}
+Accept: application/json
+
+### Create an invoice (only one invoice per document)
+POST {{wida_api_HostAddress}}/api/invoices
+Accept: application/json
+Content-Type: application/json
+
+{
+  "documentId": "{{documentId}}",
+  "supplierName": "Example Supplier",
+  "invoiceNumber": "INV-001",
+  "invoiceDate": "2026-09-06",
+  "dueDate": "2026-10-06",
+  "currency": "USD",
+  "subtotalAmount": 100,
+  "taxAmount": 10,
+  "totalAmount": 110,
+  "lines": [
+    {
+      "lineNumber": 1,
+      "description": "Example item",
+      "quantity": 2,
+      "unitPrice": 50,
+      "lineAmount": 100
+    }
+  ]
+}
+
+### Get an invoice (copy the invoice creation response id into invoiceId)
+GET {{wida_api_HostAddress}}/api/invoices/{{invoiceId}}
+Accept: application/json
+
+### Get the invoice attached to a document
+GET {{wida_api_HostAddress}}/api/invoices/document/{{documentId}}
+Accept: application/json
+
+### Create a manual Pending run (does not start analysis; requires Azure settings)
+POST {{wida_api_HostAddress}}/api/processing/documents/{{documentId}}
+Accept: application/json
+
+### Analyze an invoice with Azure Document Intelligence
+# Sends the stored document to Azure and waits for analysis during the request.
+# Creates a new run. Inspect status even on HTTP 201: it can be Failed.
+POST {{wida_api_HostAddress}}/api/processing/documents/{{documentId}}/invoice
+Accept: application/json
+
+### Get a processing run (copy a processing response id into processingRunId)
+GET {{wida_api_HostAddress}}/api/processing/{{processingRunId}}
+Accept: application/json
+
+### List processing runs for a document
+GET {{wida_api_HostAddress}}/api/processing/documents/{{documentId}}
+Accept: application/json
