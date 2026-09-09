@@ -239,12 +239,14 @@ public class ProcessingServiceTests
         public static async Task<Fixture> CreateAsync()
         {
             var fixture = new Fixture();
+            fixture.Context.Users.Add(new AppUser { Id = TestCurrentUser.Default.UserId!.Value,
+                GoogleSubject = "processing-test-user", Email = "processing@example.test", DisplayName = "Processing Test" });
             fixture.Context.Documents.Add(fixture.Document);
             await fixture.Context.SaveChangesAsync();
             return fixture;
         }
 
-        public WidaDbContext OpenContext() => new(_options);
+        public WidaDbContext OpenContext() => new(_options, TestCurrentUser.Default);
 
         public ProcessingService Service(IDocumentAnalyzer analyzer) => new(
             new ProcessingRunRepository(Context), new DocumentRepository(Context), analyzer);

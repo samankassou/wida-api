@@ -12,6 +12,11 @@ public class DocumentConfiguration : IEntityTypeConfiguration<Document>
 
         builder.HasKey(x => x.Id);
 
+        builder.HasOne(document => document.OwnerUser)
+            .WithMany()
+            .HasForeignKey(document => document.OwnerUserId)
+            .OnDelete(DeleteBehavior.Restrict);
+
         builder.Property(x => x.OriginalFileName)
             .IsRequired()
             .HasMaxLength(255);

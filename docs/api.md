@@ -2,15 +2,19 @@
 
 This reference describes the controllers, DTOs, and services in the current working tree. See the [project README](../README.md) for configuration and startup instructions.
 
+## Authentication and ownership
+
+All document, invoice, processing and original-file endpoints require a Wida session; anonymous requests return `401`. POST/PUT requests also require the user-bound `X-CSRF-TOKEN` and antiforgery cookie. Queries and writes are restricted to the current user. See [Google sign-in](authentication.md) for the session endpoints and setup. The curl examples below show request payloads; add your session cookie and CSRF token when calling protected endpoints.
+
 ## Conventions
 
-- The local HTTPS launch profile uses `https://localhost:7127`. The application enables HTTPS redirection.
+- The local HTTP launch profile uses `http://localhost:5085` behind the frontend proxy at `http://localhost:3000`. The HTTPS launch profile remains available at `https://localhost:7127`; the private API does not redirect HTTP requests.
 - JSON properties use camelCase. Enum responses use their named string values, such as `Uploaded` and `Completed`.
 - IDs are GUID strings. All ID route segments have a `:guid` constraint; malformed IDs do not match these routes.
 - Invoice dates use `YYYY-MM-DD`. Server timestamps are generated in UTC and serialized as ISO 8601 timestamps.
 - Successful creation returns `201 Created`, a response body, and a `Location` header pointing to the corresponding get-by-ID endpoint.
 - Collection endpoints return JSON arrays, including `[]` when empty. They do not support pagination or filtering.
-- No authentication or authorization is configured in the application.
+- Authentication is required for data routes. Every record is scoped to its document owner; see [session setup](authentication.md).
 - In Development, interactive documentation is available at `/scalar/v1`, and OpenAPI JSON is available at `/openapi/v1.json`.
 
 ## Routes

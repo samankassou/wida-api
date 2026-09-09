@@ -366,12 +366,14 @@ public class InvoiceWorkspaceTests
         public static async Task<Fixture> CreateAsync()
         {
             var fixture = new Fixture();
+            fixture.Context.Users.Add(new AppUser { Id = TestCurrentUser.Default.UserId!.Value,
+                GoogleSubject = "invoice-test-user", Email = "invoice@example.test", DisplayName = "Invoice Test" });
             fixture.Context.Documents.Add(fixture.Document);
             await fixture.Context.SaveChangesAsync();
             return fixture;
         }
 
-        public WidaDbContext OpenContext() => new(_options);
+        public WidaDbContext OpenContext() => new(_options, TestCurrentUser.Default);
 
         public InvoiceService InvoiceService() => new(new InvoiceRepository(Context), new DocumentRepository(Context));
 

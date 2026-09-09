@@ -1,3 +1,6 @@
+# Authentication note: data requests require Wida session/antiforgery cookies.
+# Mutations also require X-CSRF-TOKEN from GET /api/auth/session.
+# Use the signed-in frontend for the interactive flow; see docs/authentication.md.
 # Run requests individually after following README.md.
 # Replace the IDs with values returned by your own requests.
 # The all-zero GUIDs below are placeholders, not seeded records.

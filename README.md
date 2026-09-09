@@ -8,6 +8,7 @@ Wida is an ASP.NET Core API for uploading documents, recording invoices and line
 | --- | --- |
 | [Setup and development](Wida.Api/README.md) | Prerequisites, local configuration, running the API, migrations, example workflow, and troubleshooting. |
 | [API reference](docs/api.md) | Routes, request and response fields, validation, status values, and processing behavior. |
+| [Google sign-in](docs/authentication.md) | OAuth setup, invited users, session protection and document ownership. |
 | [Architecture](docs/architecture.md) | Project responsibilities, dependencies, data relationships, and persistence. |
 | [HTTP requests](Wida.Api/wida-api.http) | Requests to run individually in an editor with `.http` support after setup. |
 
@@ -20,7 +21,7 @@ Wida is an ASP.NET Core API for uploading documents, recording invoices and line
 - Retrieve processing status, extracted fields, confidence scores, and failure information.
 - Explore the API through OpenAPI and Scalar in Development.
 
-Analysis runs during the HTTP request. It records extracted fields and updates unsaved documents through processing/review/failure states. Saving invoice data sets `Saved`; reanalysis preserves that state. Analysis does not create an invoice or extract line items. Approval and export are not implemented. The API currently has no authentication or authorization configured.
+Analysis runs during the HTTP request. It records extracted fields and updates unsaved documents through processing/review/failure states. Saving invoice data sets `Saved`; reanalysis preserves that state. Analysis does not create an invoice or extract line items. Approval and export are not implemented. The API requires a Google-backed Wida session and restricts each user to their own documents. See [Google sign-in and pilot access](docs/authentication.md).
 
 ## Getting started
 

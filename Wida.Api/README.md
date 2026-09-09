@@ -11,6 +11,10 @@
 - `Wida.Dal`: entities, EF configurations and migrations, repositories, analysis contracts/models, and the Azure analyzer implementation.
 - `Wida.Tests`: automated regression tests with Azure response fixtures and an in-memory database.
 
+## Authentication
+
+All data endpoints now require a Google-backed Wida session. Configure the OAuth client, invited addresses and frontend callback using [Google sign-in and pilot access](../docs/authentication.md). New uploads are owned by the signed-in user. The ownership migration preserves existing documents without assigning them to an account.
+
 ## Local setup
 
 Install the .NET 10 SDK and use a local or remote PostgreSQL server. Azure processing also requires an Azure Document Intelligence resource endpoint and API key.
@@ -56,7 +60,7 @@ The examples use a POSIX shell, such as Bash or Zsh.
    dotnet run --launch-profile https
    ```
 
-   The HTTPS profile listens at `https://localhost:7127` and `http://localhost:5085`, with HTTPS redirection enabled. The `http` launch profile listens only at `http://localhost:5085`.
+   The HTTPS profile listens at `https://localhost:7127` and `http://localhost:5085`. Public TLS is handled at the frontend/proxy; the API does not redirect private proxy requests. The `http` launch profile listens only at `http://localhost:5085`.
 
 In Development, open [Scalar](https://localhost:7127/scalar/v1) to explore the API or inspect the [OpenAPI document](https://localhost:7127/openapi/v1.json). These routes are only mapped in Development.
 
@@ -99,7 +103,7 @@ All route IDs are GUIDs. Processing responses contain `id`, `documentId`, `statu
 
 ## Example workflow
 
-After setup, upload a document:
+After signing in through the frontend, upload a document. The curl examples below show request bodies/routes; authenticated calls also need the Wida session and antiforgery cookies, plus an `X-CSRF-TOKEN` from `GET /api/auth/session` on mutations. Prefer the frontend for the interactive workflow:
 
 ```sh
 curl --fail-with-body https://localhost:7127/api/documents \
@@ -167,6 +171,7 @@ Migrations live in `Wida.Dal/Migrations`:
 | `InitialCreate` | `Documents` |
 | `AddInvoiceEntities` | `Invoices`, `InvoiceLines` |
 | `AddProcessingEntities` | `ProcessingRuns`, `ExtractedFields` |
+| `AddGoogleUsersAndDocumentOwnership` | `Users`, nullable document ownership and indexes |
 
 A document has at most one invoice and can have multiple processing runs. Invoice lines belong to an invoice; extracted fields belong to a processing run. These child relationships use cascade deletion. Raw analysis, normalized extracted values, and bounding boxes use PostgreSQL `jsonb` columns.
 
@@ -183,7 +188,7 @@ ASPNETCORE_ENVIRONMENT=Development dotnet ef database update --project ../Wida.D
 - Processing has no background execution, run-resume endpoint, extracted-field review endpoint, or automatic invoice creation. A repeated analysis request creates a new run. Approval/rejection and export are not implemented. The workspace endpoint returns the latest 100 documents by default (up to 500); it does not provide server search or pagination.
 - Existing records with relative or duplicated storage paths are not repaired automatically. Re-upload the documents or explicitly repair their metadata to point to existing files.
 - Filesystem and database writes are not transactional; process termination or unsuccessful cleanup can leave orphan uploads. A failed terminal database save can leave a processing run `Running`.
-- Authentication, authorization, and a CORS policy are not configured. Separate browser origins need a same-origin proxy or an explicitly configured CORS policy.
+- Browser traffic uses the same-origin Next.js proxy. Authentication, ownership checks and CSRF protection apply to every data request; no cross-origin browser API policy is enabled.
 
 ## Troubleshooting
 
