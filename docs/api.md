@@ -155,7 +155,7 @@ The invoice validator checks the following rules before looking up the document:
 
 1. `supplierName`, `invoiceNumber`, `invoiceDate`, and `totalAmount` are required.
 2. If supplied, `dueDate` cannot be earlier than `invoiceDate`.
-3. When subtotal, tax, and total are all supplied, `subtotalAmount + taxAmount` must equal `totalAmount`.
+3. When subtotal, tax, and total are all supplied, `subtotalAmount + taxAmount + shippingAmount - discountAmount` must equal `totalAmount`. Missing shipping and discount amounts count as zero. Shipping is an additional charge and discount is a deduction from the stated subtotal; do not enter adjustments already included in that subtotal.
 4. For each line where quantity, unit price, and line amount are supplied, `quantity × unitPrice` must equal `lineAmount`.
 5. When a subtotal and at least one line are supplied, and every line has a line amount, the sum of those amounts must equal the subtotal.
 
@@ -199,7 +199,7 @@ curl --fail-with-body -X POST \
 
 This endpoint creates a separate `Running` record with processor `AzureDocumentIntelligence` and version `prebuilt-invoice`, reads the stored file, and waits for Azure analysis to complete within the HTTP request. It then saves and returns the run as `Completed` or `Failed`. Calling it again creates another run; it does not resume an earlier manual or failed run.
 
-The analyzer reads only the first document returned by Azure. It extracts these fields when present: `InvoiceId`, `InvoiceDate`, `DueDate`, `VendorName`, `SubTotal`, `TotalTax`, and `InvoiceTotal`. It does not extract invoice line items. No analyzed documents results in a `Failed` run. An analyzed document without any of the selected fields can complete with an empty `extractedFields` array.
+The analyzer reads only the first document returned by Azure. It extracts these fields when present: `InvoiceId`, `InvoiceDate`, `DueDate`, `VendorName`, `SubTotal`, `TotalTax`, `InvoiceTotal`, and `TotalDiscount`. It also extracts `Items` fields as `Items[0].Description`, `Items[0].Quantity`, etc., using zero-based Azure array indices. Supported line fields are `Description`, `Quantity`, `Unit`, `UnitPrice`, `TaxRate`, `Tax`, and `Amount`. Each field retains its typed normalized value, raw text, confidence, page, bounding polygon, and review flag in the existing `extractedFields` collection; no database migration is required. Empty or non-object rows and absent fields are skipped; no missing values are invented. No analyzed documents results in a `Failed` run. An analyzed document without any of the selected fields can complete with an empty `extractedFields` array.
 
 Raw analysis and extracted fields are stored in the database. An extracted field has `requiresReview: true` when confidence is missing or below `0.80`; confidence equal to `0.80` does not require review. This flag does not decide whether data is valid. Every completed analysis of an unsaved document moves it to `ReviewRequired`, including empty extraction or high-confidence results. When available, the first bounding region supplies the field's page number and polygon.
 
@@ -304,7 +304,7 @@ Invoice create/update errors are mapped by the invoice controller to `applicatio
   "status": 400,
   "errors": {
     "supplierName": ["This field is required."],
-    "totalAmount": ["Subtotal + tax amount does not match total amount."]
+    "totalAmount": ["Subtotal + tax + shipping − discount does not match total amount."]
   }
 }
 ```
@@ -319,7 +319,7 @@ Always inspect the analysis run's `status`; `curl --fail-with-body` alone cannot
 
 - Historical document records with relative or duplicated storage paths are not repaired automatically. Re-upload those documents or explicitly repair their metadata to point to existing files.
 - File writes and database writes are not atomic: a process interruption or failed cleanup can leave an orphan upload.
-- Only seven selected header fields from the first analyzed document are extracted; line items and additional analyzed documents are not processed.
+- Eight selected header fields and supported line-item fields from the first analyzed document are extracted; additional analyzed documents are not processed.
 - There is no background worker, run-resume endpoint, extraction-review workflow, automatic invoice creation, or approval/rejection action in the current API.
 
 ## Source map
@@ -331,3 +331,11 @@ Always inspect the analysis run's `status`; `curl --fail-with-body` alone cannot
 - Run lifecycle and field persistence: [ProcessingService](../Wida.Bll/Services/Implementations/ProcessingService.cs).
 - Azure extraction: [AzureDocumentAnalyzer](../Wida.Dal/Services/AzureDocumentAnalyzer.cs).
 - Database constraints and query ordering: [configurations](../Wida.Dal/Configurations) and [repositories](../Wida.Dal/Repositories/Implementations).
+
+### Shipping and discount adjustments
+
+Invoice requests and responses include nullable decimal `shippingAmount` and `discountAmount` (precision 18, scale 4). Both are persisted on create/update and cleared by omission on a full update. Apply migration `20260910120000_AddInvoiceAdjustments` before running the updated API. Existing records retain null adjustments.
+
+The analyzer extracts `TotalDiscount` when returned by Azure. Shipping is entered manually: the [Azure invoice schema](https://github.com/Azure-Samples/document-intelligence-code-samples/blob/main/schema/2024-11-30-ga/invoice.md) has no dedicated shipping-charge field. Shipping is never inferred from a difference between totals.
+
+Tax-inclusive line amounts with net unit prices are accepted when the line's tax amount or percentage reconciles the difference within 0.01. If both tax values are supplied, both must agree. Subtotal validation uses the net quantity × unit price for these lines; stored source amounts are unchanged. Lines without tax evidence retain the existing net-amount validation. The review form identifies recognized tax-inclusive amounts and shows the net amount used for the subtotal check.

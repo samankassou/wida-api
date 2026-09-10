@@ -12,6 +12,8 @@ public record InvoiceResponse(
     string? PurchaseOrderNumber,
     string? Currency,
     decimal? SubtotalAmount,
+    decimal? ShippingAmount,
+    decimal? DiscountAmount,
     decimal? TaxAmount,
     decimal? TotalAmount,
     IReadOnlyList<InvoiceLineResponse> Lines,

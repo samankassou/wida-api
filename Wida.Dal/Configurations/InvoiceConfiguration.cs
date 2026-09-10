@@ -33,6 +33,9 @@ public class InvoiceConfiguration : IEntityTypeConfiguration<Invoice>
         builder.Property(x => x.SubtotalAmount)
             .HasPrecision(18, 4);
 
+        builder.Property(x => x.ShippingAmount).HasPrecision(18, 4);
+        builder.Property(x => x.DiscountAmount).HasPrecision(18, 4);
+
         builder.Property(x => x.TaxAmount)
             .HasPrecision(18, 4);
 

@@ -41,7 +41,9 @@ public class ProcessingServiceTests
                     Field("VendorName", "Example Supplier", 0.80m),
                     Field("InvoiceDate", "2026-09-07", 0.79m),
                     Field("InvoiceTotal", new { amount = 110.50m, currencyCode = "USD" }, null),
-                    Field("TotalTax", 10.50m, 0.99m)
+                    Field("TotalTax", 10.50m, 0.99m),
+                    Field("Items[0].Description", "Consulting", 0.60m),
+                    Field("Items[0].Amount", new { amount = 100m, currencyCode = "USD" }, 0.95m)
                 ]
             };
         });
@@ -52,12 +54,12 @@ public class ProcessingServiceTests
         Assert.Equal(ProcessingStatus.Completed, response.Status);
         Assert.NotNull(response.CompletedAt);
         Assert.Null(response.ErrorCode);
-        Assert.Equal(4, response.ExtractedFields.Count);
+        Assert.Equal(6, response.ExtractedFields.Count);
         await using var persistedContext = fixture.OpenContext();
         var saved = await persistedContext.ProcessingRuns.Include(run => run.ExtractedFields).SingleAsync();
         Assert.Equal(ProcessingStatus.Completed, saved.Status);
         Assert.Equal("{\"modelId\":\"prebuilt-invoice\"}", saved.RawResult);
-        Assert.Equal(4, await persistedContext.ExtractedFields.CountAsync());
+        Assert.Equal(6, await persistedContext.ExtractedFields.CountAsync());
         var document = await persistedContext.Documents.SingleAsync();
         Assert.Equal(DocumentStatus.ReviewRequired, document.Status);
         Assert.Equal(DocumentType.Invoice, document.DocumentType);
@@ -78,7 +80,14 @@ public class ProcessingServiceTests
         Assert.Equal(110.50m, total.NormalizedValue!.Value.GetProperty("amount").GetDecimal());
         Assert.Equal(10.50m, Assert.Single(read.ExtractedFields, field => field.FieldName == "TotalTax")
             .NormalizedValue!.Value.GetDecimal());
-        Assert.Equal(4, Assert.Single(await reader.GetByDocumentIdAsync(fixture.Document.Id)).ExtractedFields.Count);
+        var line = Assert.Single(read.ExtractedFields, field => field.FieldName == "Items[0].Description");
+        Assert.True(line.RequiresReview);
+        Assert.Equal("Consulting", line.NormalizedValue!.Value.GetString());
+        Assert.Equal(2, line.PageNumber);
+        var amount = Assert.Single(read.ExtractedFields, field => field.FieldName == "Items[0].Amount");
+        Assert.False(amount.RequiresReview);
+        Assert.Equal(100m, amount.NormalizedValue!.Value.GetProperty("amount").GetDecimal());
+        Assert.Equal(6, Assert.Single(await reader.GetByDocumentIdAsync(fixture.Document.Id)).ExtractedFields.Count);
     }
 
     [Fact]

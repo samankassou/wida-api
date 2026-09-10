@@ -14,7 +14,12 @@ public class AzureDocumentAnalyzer : IDocumentAnalyzer
     private static readonly string[] InvoiceFields =
     [
         "InvoiceId", "InvoiceDate", "DueDate", "VendorName",
-        "SubTotal", "TotalTax", "InvoiceTotal"
+        "SubTotal", "TotalTax", "InvoiceTotal", "TotalDiscount"
+    ];
+
+    private static readonly string[] LineFields =
+    [
+        "Description", "Quantity", "Unit", "UnitPrice", "TaxRate", "Tax", "Amount"
     ];
 
     private readonly IConfiguration _configuration;
@@ -64,6 +69,23 @@ public class AzureDocumentAnalyzer : IDocumentAnalyzer
             AddField(document, analysis, fieldName);
         }
 
+        if (document.Fields.TryGetValue("Items", out var items)
+            && items.FieldType == DocumentFieldType.List)
+        {
+            for (var index = 0; index < items.ValueList.Count; index++)
+            {
+                var item = items.ValueList[index];
+                if (item.FieldType != DocumentFieldType.Dictionary) continue;
+                foreach (var fieldName in LineFields)
+                {
+                    if (item.ValueDictionary.TryGetValue(fieldName, out var field))
+                    {
+                        AddField(analysis, $"Items[{index}].{fieldName}", field);
+                    }
+                }
+            }
+        }
+
         return analysis;
     }
 
@@ -105,6 +127,11 @@ public class AzureDocumentAnalyzer : IDocumentAnalyzer
             return;
         }
 
+        AddField(result, fieldName, field);
+    }
+
+    private static void AddField(DocumentAnalysisResult result, string fieldName, DocumentField field)
+    {
         BoundingRegion? region = field.BoundingRegions.Count == 0
             ? null
             : field.BoundingRegions[0];

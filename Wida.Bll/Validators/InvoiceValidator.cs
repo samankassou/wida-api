@@ -37,6 +37,8 @@ public static class InvoiceValidator
         if (invoice.InvoiceDate is null) Add("invoiceDate", "Invoice date is required.");
         if (invoice.TotalAmount is null) Add("totalAmount", "Total amount is required.");
         Number("subtotalAmount", invoice.SubtotalAmount);
+        Number("shippingAmount", invoice.ShippingAmount);
+        Number("discountAmount", invoice.DiscountAmount);
         Number("taxAmount", invoice.TaxAmount);
         Number("totalAmount", invoice.TotalAmount);
         if (invoice.InvoiceDate is { } date && invoice.DueDate is { } due && due < date)
@@ -61,8 +63,8 @@ public static class InvoiceValidator
                 {
                     try
                     {
-                        if (!AreAmountsEqual(quantity * price, amount))
-                            Add($"{prefix}.lineAmount", "Quantity × unit price does not match line amount.");
+                        if (!AreAmountsEqual(quantity * price, amount) && TaxInclusiveLineNet(line) is null)
+                            Add($"{prefix}.lineAmount", "Quantity × unit price does not match line amount, with or without the specified tax.");
                     }
                     catch (OverflowException) { Add($"{prefix}.lineAmount", "Quantity × unit price exceeds the supported range."); }
                 }
@@ -71,16 +73,28 @@ public static class InvoiceValidator
         try
         {
             if (invoice.SubtotalAmount is { } subtotal && invoice.TaxAmount is { } tax && invoice.TotalAmount is { } total
-                && !AreAmountsEqual(subtotal + tax, total))
-                Add("totalAmount", "Subtotal + tax amount does not match total amount.");
+                && !AreAmountsEqual(subtotal + tax + (invoice.ShippingAmount ?? 0m) - (invoice.DiscountAmount ?? 0m), total))
+                Add("totalAmount", "Subtotal + tax + shipping − discount does not match total amount.");
             if (invoice.SubtotalAmount is { } lineSubtotal && invoice.Lines is { Count: > 0 } lines
                 && lines.All(line => line?.LineAmount is not null)
-                && !AreAmountsEqual(lines.Sum(line => line.LineAmount!.Value), lineSubtotal))
+                && !AreAmountsEqual(lines.Sum(line => TaxInclusiveLineNet(line) ?? line.LineAmount!.Value), lineSubtotal))
                 Add("subtotalAmount", "Sum of invoice lines does not match subtotal amount.");
         }
         catch (OverflowException) { Add("totalAmount", "The combined amounts exceed the supported range."); }
 
         return errors.ToDictionary(pair => pair.Key, pair => pair.Value.ToArray());
+    }
+
+    private static decimal? TaxInclusiveLineNet(CreateInvoiceLineRequest line)
+    {
+        if (line.Quantity is not { } quantity || line.UnitPrice is not { } price || line.LineAmount is not { } amount)
+            return null;
+        var net = quantity * price;
+        if (AreAmountsEqual(net, amount)) return null;
+        if (line.TaxAmount is null && line.TaxRate is null) return null;
+        if (line.TaxAmount is { } tax && !AreAmountsEqual(net + tax, amount)) return null;
+        if (line.TaxRate is { } rate && !AreAmountsEqual(net + net * rate / 100m, amount)) return null;
+        return net;
     }
 
     private static bool AreAmountsEqual(decimal first, decimal second) => Math.Abs(first - second) <= 0.01m;

@@ -192,7 +192,7 @@ ASPNETCORE_ENVIRONMENT=Development dotnet ef database update --project ../Wida.D
 
 ## Current limitations
 
-- Processing extracts seven header fields from the first analyzed document. It does not extract line items or process additional analyzed documents in the same file.
+- Processing extracts eight header fields and supported line items from the first analyzed document. It does not process additional analyzed documents in the same file. Shipping is entered manually; discounts can be extracted. Apply migration `20260910120000_AddInvoiceAdjustments` for the persisted shipping and discount amounts.
 - Processing has no background execution, run-resume endpoint, extracted-field review endpoint, or automatic invoice creation. A repeated analysis request creates a new run. Approval/rejection and export are not implemented. The workspace endpoint returns the latest 100 documents by default (up to 500); it does not provide server search or pagination.
 - Existing records with relative or duplicated storage paths are not repaired automatically. Re-upload the documents or explicitly repair their metadata to point to existing files.
 - Filesystem and database writes are not transactional; process termination or unsuccessful cleanup can leave orphan uploads. A failed terminal database save can leave a processing run `Running`.

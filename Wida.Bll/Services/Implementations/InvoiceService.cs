@@ -131,6 +131,8 @@ public class InvoiceService : IInvoiceService
         invoice.PurchaseOrderNumber = request.PurchaseOrderNumber;
         invoice.Currency = request.Currency;
         invoice.SubtotalAmount = request.SubtotalAmount;
+        invoice.ShippingAmount = request.ShippingAmount;
+        invoice.DiscountAmount = request.DiscountAmount;
         invoice.TaxAmount = request.TaxAmount;
         invoice.TotalAmount = request.TotalAmount;
     }
@@ -163,6 +165,8 @@ public class InvoiceService : IInvoiceService
             invoice.PurchaseOrderNumber,
             invoice.Currency,
             invoice.SubtotalAmount,
+            invoice.ShippingAmount,
+            invoice.DiscountAmount,
             invoice.TaxAmount,
             invoice.TotalAmount,
             invoice.Lines

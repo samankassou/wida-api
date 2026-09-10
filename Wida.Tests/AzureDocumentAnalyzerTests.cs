@@ -46,6 +46,7 @@ public class AzureDocumentAnalyzerTests
                       "type": "currency", "content": "$120.50",
                       "valueCurrency": { "amount": 120.5, "currencySymbol": "$", "currencyCode": "USD" }
                     },
+                    "TotalDiscount": { "type": "currency", "content": "$5", "valueCurrency": { "amount": 5 } },
                     "CustomerName": { "type": "string", "valueString": "Unselected customer" }
                   }
                 },
@@ -72,7 +73,7 @@ public class AzureDocumentAnalyzerTests
             Assert.Equal("invoice bytes", client.DocumentBytes?.ToString());
             Assert.Equal(cancellation.Token, client.CancellationToken);
             Assert.Equal(
-                ["InvoiceId", "InvoiceDate", "DueDate", "VendorName", "SubTotal", "TotalTax", "InvoiceTotal"],
+                ["InvoiceId", "InvoiceDate", "DueDate", "VendorName", "SubTotal", "TotalTax", "InvoiceTotal", "TotalDiscount"],
                 result.Fields.Select(field => field.Name));
 
             var fields = result.Fields.ToDictionary(field => field.Name);
@@ -91,6 +92,7 @@ public class AzureDocumentAnalyzerTests
             Assert.Null(fields["VendorName"].BoundingBox);
             Assert.Equal(100.5, fields["SubTotal"].NormalizedValue!.Value.GetDouble());
             Assert.Equal(20, fields["TotalTax"].NormalizedValue!.Value.GetInt64());
+            Assert.Equal(5, fields["TotalDiscount"].NormalizedValue!.Value.GetProperty("amount").GetDouble());
             var currency = fields["InvoiceTotal"].NormalizedValue!.Value;
             Assert.Equal(JsonValueKind.Object, currency.ValueKind);
             Assert.Equal(120.5, currency.GetProperty("amount").GetDouble());
@@ -138,6 +140,59 @@ public class AzureDocumentAnalyzerTests
         {
             File.Delete(filePath);
         }
+    }
+
+    [Fact]
+    public async Task AnalyzeInvoiceAsync_ExtractsLineFieldsWithTypesOrderAndSourceMetadata()
+    {
+        var sdkResult = ModelReaderWriter.Read<AnalyzeResult>(BinaryData.FromString("""
+            {
+              "apiVersion": "2024-11-30", "modelId": "prebuilt-invoice", "content": "",
+              "pages": [], "documents": [{ "docType": "invoice", "spans": [], "fields": {
+                "Items": { "type": "array", "valueArray": [
+                  { "type": "object", "valueObject": {
+                    "Description": { "type": "string", "valueString": "Consulting", "content": "Consulting", "confidence": 0.7,
+                      "boundingRegions": [{ "pageNumber": 2, "polygon": [1, 2, 3, 2, 3, 4, 1, 4] }] },
+                    "Quantity": { "type": "number", "valueNumber": 2.5 },
+                    "Unit": { "type": "string", "valueString": "hours" },
+                    "UnitPrice": { "type": "currency", "valueCurrency": { "amount": 100, "currencyCode": "EUR" } },
+                    "TaxRate": { "type": "string", "valueString": "20 %" },
+                    "Tax": { "type": "currency", "valueCurrency": { "amount": 50 } },
+                    "Amount": { "type": "currency", "valueCurrency": { "amount": 250 } }
+                  } },
+                  { "type": "object", "valueObject": {} },
+                  { "type": "string", "valueString": "invalid row" },
+                  { "type": "object", "valueObject": {
+                    "Description": { "type": "string", "content": "unreadable" },
+                    "Quantity": { "type": "integer", "valueInteger": 0 }
+                  } }
+                ] }
+              } }]
+            }
+            """))!;
+        var analyzer = new AzureDocumentAnalyzer(new ConfigurationBuilder().Build(), new FakeDocumentIntelligenceClient(sdkResult));
+        var path = Path.GetTempFileName();
+        try
+        {
+            var result = await analyzer.AnalyzeInvoiceAsync(path);
+            Assert.Equal(new[] { "Items[0].Description", "Items[0].Quantity", "Items[0].Unit", "Items[0].UnitPrice",
+                "Items[0].TaxRate", "Items[0].Tax", "Items[0].Amount", "Items[3].Description", "Items[3].Quantity" },
+                result.Fields.Select(field => field.Name));
+            var fields = result.Fields.ToDictionary(field => field.Name);
+            Assert.Equal("Consulting", fields["Items[0].Description"].NormalizedValue!.Value.GetString());
+            Assert.Equal("Consulting", fields["Items[0].Description"].RawValue);
+            Assert.Equal(0.7m, fields["Items[0].Description"].Confidence);
+            Assert.Equal(2, fields["Items[0].Description"].PageNumber);
+            Assert.Equal(8, fields["Items[0].Description"].BoundingBox!.Value.GetArrayLength());
+            Assert.Equal(2.5, fields["Items[0].Quantity"].NormalizedValue!.Value.GetDouble());
+            Assert.Equal(100, fields["Items[0].UnitPrice"].NormalizedValue!.Value.GetProperty("amount").GetDouble());
+            Assert.Equal("20 %", fields["Items[0].TaxRate"].NormalizedValue!.Value.GetString());
+            Assert.Equal(50, fields["Items[0].Tax"].NormalizedValue!.Value.GetProperty("amount").GetDouble());
+            Assert.Null(fields["Items[3].Description"].NormalizedValue);
+            Assert.Null(fields["Items[3].Description"].Confidence);
+            Assert.Equal(0, fields["Items[3].Quantity"].NormalizedValue!.Value.GetInt64());
+        }
+        finally { File.Delete(path); }
     }
 
     [Fact]

@@ -15,6 +15,74 @@ namespace Wida.Tests;
 public class InvoiceWorkspaceTests
 {
     [Fact]
+    public async Task Tax_inclusive_lines_with_net_unit_prices_preserve_source_amounts()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var request = ValidInvoice(fixture.Document.Id);
+        request.SubtotalAmount = 1507.50m;
+        request.TaxAmount = 150.75m;
+        request.TotalAmount = 1658.25m;
+        request.Lines = [
+            new() { Quantity = 5m, UnitPrice = 22.50m, TaxRate = 10m, LineAmount = 123.75m },
+            new() { Quantity = 5m, UnitPrice = 279m, TaxRate = 10m, LineAmount = 1534.50m }
+        ];
+        var service = fixture.InvoiceService();
+        var saved = await service.CreateAsync(request);
+        Assert.Contains(saved.Lines, line => line.LineAmount == 123.75m);
+        request.Lines[0].TaxRate = null;
+        await Assert.ThrowsAsync<InvoiceValidationException>(() => service.UpdateAsync(saved.Id, request));
+        request.Lines[0].TaxAmount = 11.25m;
+        await service.UpdateAsync(saved.Id, request);
+        request.Lines[0].TaxRate = 20m;
+        await Assert.ThrowsAsync<InvoiceValidationException>(() => service.UpdateAsync(saved.Id, request));
+        request.Lines[0].TaxRate = 10m;
+        request.Lines[0].LineAmount = 124m;
+        await Assert.ThrowsAsync<InvoiceValidationException>(() => service.UpdateAsync(saved.Id, request));
+    }
+
+    [Fact]
+    public void Adjustment_migration_matches_the_PostgreSql_model()
+    {
+        using var context = new WidaDbContext(new DbContextOptionsBuilder<WidaDbContext>()
+            .UseNpgsql("Host=localhost;Database=migration_check;Username=test;Password=test")
+            .Options, TestCurrentUser.Default);
+        Assert.False(context.Database.HasPendingModelChanges());
+        Assert.Contains("20260910120000_AddInvoiceAdjustments", context.Database.GetMigrations());
+    }
+
+    [Fact]
+    public async Task Shipping_and_discount_are_validated_persisted_and_updated()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var request = ValidInvoice(fixture.Document.Id);
+        request.SubtotalAmount = 3312.82m;
+        request.TaxAmount = 0m;
+        request.ShippingAmount = 50m;
+        request.DiscountAmount = 0m;
+        request.TotalAmount = 3362.82m;
+        request.Lines = [];
+        var service = fixture.InvoiceService();
+        var created = await service.CreateAsync(request);
+        Assert.Equal(50m, created.ShippingAmount);
+        request.DiscountAmount = 12.82m;
+        request.TotalAmount = 3350m;
+        var updated = await service.UpdateAsync(created.Id, request);
+        Assert.Equal(12.82m, updated.DiscountAmount);
+        await using var context = fixture.OpenContext();
+        var saved = await context.Invoices.SingleAsync();
+        Assert.Equal(50m, saved.ShippingAmount);
+        Assert.Equal(12.82m, saved.DiscountAmount);
+        Assert.Equal(3350m, saved.TotalAmount);
+        request.TotalAmount = 3312.82m;
+        await Assert.ThrowsAsync<InvoiceValidationException>(() => service.UpdateAsync(created.Id, request));
+        request.ShippingAmount = null;
+        request.DiscountAmount = null;
+        var cleared = await service.UpdateAsync(created.Id, request);
+        Assert.Null(cleared.ShippingAmount);
+        Assert.Null(cleared.DiscountAmount);
+    }
+
+    [Fact]
     public async Task Creating_an_invoice_persists_its_lines_and_marks_the_source_document_saved()
     {
         await using var fixture = await Fixture.CreateAsync();
