@@ -68,6 +68,8 @@ The session lasts eight hours with sliding renewal. Cookies use HttpOnly and Sam
 | GET | `/api/auth/callback` | Internal callback handled by OIDC middleware. Public callback is `/api/wida/auth/callback`. |
 | POST | `/api/auth/logout` | Requires session cookie and `X-CSRF-TOKEN`; clears Wida session. |
 
+The Development-only Scalar and OpenAPI routes are also protected by the default authenticated-user policy.
+
 All document, original-file, invoice and processing routes require a Wida session; unauthenticated requests return `401`. POST/PUT controller routes validate `X-CSRF-TOKEN` against the cookie and user; missing/invalid tokens return `400`. The Next.js proxy also rejects mutations whose Origin is missing or different from the configured public origin. Clients obtain the token from the session endpoint after sign-in.
 
 The proxy forwards only `Wida.*` cookies and preserves separate Set-Cookie headers. It returns allowed Google navigation redirects without following them, rejecting other redirects. Session and data responses are uncached.
@@ -78,12 +80,12 @@ New uploads receive the authenticated Wida user ID on the server. Query filters 
 
 The migration is additive: existing documents retain `OwnerUserId = NULL` and originals stay on disk. They are inaccessible to signed-in users and never automatically assigned to the first account. A trusted operator must identify the intended owner and specific legacy documents before explicit database assignment. There is no ownership-transfer endpoint.
 
-Live drafts are scoped to the user ID and browser-tab session. Expiry preserves them for the same user. Explicit logout warns about unsaved drafts and clears them in the current tab. Other tabs hide their workspace while retaining owner-scoped recovery data.
+Live drafts are scoped to the user ID and browser-tab session. Expiry preserves them for the same user. Explicit logout warns about unsaved drafts and clears them in the current tab. Other tabs hide their workspace while retaining owner-scoped recovery data. Edited values survive extraction retries, but checks are tied to a specific run and reset when it changes. Drafts without a stored run ID retain their values but require review again.
 
 ## Verification
 
 `dotnet test Wida.slnx` includes HTTP tests with a simulated OIDC provider, signed ID tokens, real cookie middleware and antiforgery. Coverage includes PKCE/state/nonce, verified-email/invitation checks, anonymous denial, logout, revoked invitations, foreign document access and user-bound CSRF. Domain tests cover child queries and write guards.
 
-These automated tests use an in-memory database and simulated Google responses. Real login requires Google credentials and an invited account. Verify the deployed callback and isolation with two real accounts before opening the pilot.
+These authentication HTTP tests use EF InMemory and simulated Google responses. The separate processing/concurrency suite uses SQLite transactions; see [test coverage](../Wida.Api/README.md#build-check). Real login requires Google credentials and an invited account. Verify the deployed callback and isolation with two real accounts before opening the pilot.
 
 References: [Google OpenID Connect](https://developers.google.com/identity/openid-connect/openid-connect), [ASP.NET Core OIDC](https://learn.microsoft.com/en-us/aspnet/core/security/authentication/configure-oidc-web-authentication?view=aspnetcore-10.0).

@@ -19,15 +19,15 @@ Wida is an ASP.NET Core API for uploading documents, recording invoices and line
 - Create, update, list, and retrieve one invoice per document, with optional line items and field-specific validation errors.
 - Record a manual processing run or request Azure's `prebuilt-invoice` analysis.
 - Retrieve processing status, extracted fields, confidence scores, and failure information.
-- Explore the API through OpenAPI and Scalar in Development.
+- Inspect the API through OpenAPI and Scalar in Development with an authenticated session.
 
-Analysis runs during the HTTP request. It records extracted fields and updates unsaved documents through processing/review/failure states. Saving invoice data sets `Saved`; reanalysis preserves that state. Analysis does not create an invoice or extract line items. Approval and export are not implemented. The API requires a Google-backed Wida session and restricts each user to their own documents. See [Google sign-in and pilot access](docs/authentication.md).
+Analysis runs during the HTTP request. It records extracted fields and updates unsaved documents through processing/review/failure states. Saving invoice data sets `Saved`; reanalysis preserves that state even when saving occurs while extraction is still running. Analysis does not create an invoice or extract line items. Approval and export are not implemented. The API requires a Google-backed Wida session and restricts each user to their own documents. See [Google sign-in and pilot access](docs/authentication.md).
 
 ## Getting started
 
-You need the .NET 10 SDK and a PostgreSQL database. Invoice analysis also requires an Azure Document Intelligence endpoint and API key; reading processing runs and creating manual runs do not. Follow the [local setup guide](Wida.Api/README.md#local-setup) to configure User Secrets, restore dependencies, apply migrations, and start the HTTPS profile.
+You need the .NET 10 SDK and a PostgreSQL database. Invoice analysis also requires an Azure Document Intelligence endpoint and API key; reading processing runs and creating manual runs do not. Follow the [local setup guide](Wida.Api/README.md#local-setup) to configure User Secrets, restore dependencies, apply migrations, configure Google pilot access, and start the HTTP profile for the local frontend.
 
-The development HTTPS address is `https://localhost:7127`. Once the application is running, use [Scalar](https://localhost:7127/scalar/v1) or the [request examples](Wida.Api/wida-api.http).
+The local HTTP profile uses `http://localhost:5085`; the optional HTTPS profile also exposes `https://localhost:7127`. Sign in through the frontend before using protected data routes. Development API documentation is available at `/scalar/v1` and `/openapi/v1.json` on the selected API origin and is also covered by the authenticated-user policy. The [request examples](Wida.Api/wida-api.http) illustrate payloads; add session cookies and a CSRF token before sending mutations.
 
 To build and run the automated tests from the repository root:
 
@@ -37,6 +37,10 @@ dotnet test Wida.slnx
 ```
 
 `Wida.Tests` exercises the analysis workflow with Azure response fixtures, SQLite for transactional processing/concurrency tests, and EF InMemory for the remaining service fixtures. The [build check](Wida.Api/README.md#build-check) also describes verification against your own PostgreSQL database and Azure resource.
+
+## Verification baseline
+
+On 10 September 2026, all **81 API tests** passed for commit `2e4011e`. Processing/concurrency tests use SQLite transactions so failed saves roll back before retry. Authentication HTTP tests use simulated Google responses with real cookie/antiforgery middleware, while other service fixtures use EF InMemory. No live Google, PostgreSQL, or Azure end-to-end result is implied by these tests.
 
 ## Licence
 

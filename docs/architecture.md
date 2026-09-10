@@ -35,6 +35,10 @@ The controller persists the exact absolute path of the written file. If copying 
 
 Invoice creation is independent of processing runs. Creation and updates set document type `Invoice` and status `Saved`, which represents saved data rather than approval. PUT validates before mutating tracked entities, replaces lines with explicitly added new rows, removes old rows, and saves invoice/document changes in one EF unit of work. Typed validation, missing-record, and conflict exceptions map to structured `400`, `404`, and `409`; see [error behavior](api.md#error-behavior).
 
+### Concurrent invoice saving and extraction
+
+Document status is an optimistic concurrency token. If invoice saving overlaps an extraction status update, `WidaDbContext.SaveChangesAsync` reconciles that specific conflict with `Saved` taking precedence and retries once. Other conflicts still fail. This uses the existing status column and requires no database schema change. Processing tests use SQLite transactions to verify that a failed write rolls back before retrying, including extracted fields and invoice insertion.
+
 ### Processing
 
 The manual endpoint only inserts a `Pending` run with processor `Manual` and version `v1`. It does not queue work or transition that run later.
@@ -49,17 +53,19 @@ The processing controller maps a typed missing-document exception to `404` for b
 
 ```mermaid
 erDiagram
+    Users o|--o{ Documents : owns
     Documents ||--o| Invoices : has
     Invoices ||--o{ InvoiceLines : contains
     Documents ||--o{ ProcessingRuns : tracks
     ProcessingRuns ||--o{ ExtractedFields : records
 ```
 
-All entity primary keys are application-generated GUIDs. Document, invoice, and processing timestamps are initialized in UTC; invoice and due dates use `DateOnly`. All relationships shown above use cascade deletion in the database, although the API has no deletion endpoints.
+All entity primary keys are application-generated GUIDs. Document, invoice, and processing timestamps are initialized in UTC; invoice and due dates use `DateOnly`. Document-to-invoice/run and invoice/run-to-child relationships use cascade deletion. The optional user-owner relationship uses restricted deletion. The API has no deletion endpoints.
 
 | Entity | Stored data |
 | --- | --- |
-| `Document` | Original filename, content type, storage path, document type/status, upload and audit timestamps. |
+| `AppUser` | Google subject, email, display name, and creation timestamp. |
+| `Document` | Nullable owner user ID, original filename, content type, storage path, document type/status, upload and audit timestamps. |
 | `Invoice` | Supplier and invoice details, dates, currency, amounts, audit timestamps, and document ID. |
 | `InvoiceLine` | Position, description, quantity, unit, pricing/tax values, and invoice ID. |
 | `ProcessingRun` | Processor/version, status, timestamps, error details, raw result, and document ID. |
@@ -78,7 +84,3 @@ Uploaded files must remain accessible at their recorded filesystem paths. Preser
 OpenAPI and Scalar routes are mapped only in Development. Startup configures Google OpenID Connect, Wida cookie sessions, a default authenticated-user policy, and antiforgery validation for controller mutations. The frontend is the public HTTPS origin; the private API uses the configured public scheme instead of redirecting proxy requests. There is no CORS policy, global exception handler, background processing, or health-check endpoint. See [authentication](authentication.md) for the pilot allowlist and deployment.
 
 `Users` stores the stable Google subject and local identity. `Documents.OwnerUserId` is stamped at persistence time. Global query filters scope all five document-related entities to `ICurrentUser.UserId`, and save guards also reject foreign-parent writes and ownership changes. Legacy documents remain unowned and inaccessible until explicitly assigned by a trusted operator.
-
-### Concurrent invoice saving and extraction
-
-Document status is an optimistic concurrency token. If invoice saving overlaps an extraction status update, `WidaDbContext.SaveChangesAsync` reconciles that specific conflict with `Saved` taking precedence and retries once. Other conflicts still fail. This uses the existing status column and requires no database schema change. Processing tests use SQLite transactions to verify that a failed write rolls back before retrying, including extracted fields and invoice insertion.

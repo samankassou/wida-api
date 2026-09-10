@@ -79,7 +79,7 @@ Files are written to `<content-root>/uploads` under a generated GUID filename wi
 | `status` | string enum | `Uploaded` for newly uploaded documents |
 | `uploadedAt` | timestamp | Time the document entity was created |
 
-The storage path is not exposed. Upload does not create an invoice or start analysis. Analysis sets type `Invoice` and, for an unsaved document, moves status through `Processing` to `ReviewRequired` or `Failed`. Creating or updating a structured invoice sets status `Saved`. `Saved` means data was saved, not approved. Reanalysis preserves a document that was already `Saved`; the new run still reports its own progress or failure. Manual pending runs do not change document status.
+The storage path is not exposed. Upload does not create an invoice or start analysis. Analysis sets type `Invoice` and, for an unsaved document, moves status through `Processing` to `ReviewRequired` or `Failed`. Creating or updating a structured invoice sets status `Saved`. `Saved` means data was saved, not approved. Reanalysis preserves a document that was already `Saved`. If an invoice is saved while analysis is running, `Saved` also takes precedence over the analysis status update. The new run still reports its own progress or failure. Manual pending runs do not change document status.
 
 ## Invoices
 
@@ -273,12 +273,15 @@ Normalized values and bounding data are JSON values, not strings containing JSON
 | Document `status` | `Uploaded`, `Queued`, `Processing`, `ReviewRequired`, `Approved`, `Rejected`, `Failed`, `Saved` |
 | Processing run `status` | `Pending`, `Running`, `Completed`, `Failed` |
 
-Upload creates `Unknown` / `Uploaded`; analysis sets `Invoice` and moves unsaved documents through `Processing` to `ReviewRequired` or `Failed`; invoice creation/update sets `Invoice` / `Saved`. Existing `Saved` status survives reanalysis. `Queued`, `Approved`, and `Rejected` are reserved and have no implemented action. `Saved` is the integer enum value 7 and requires no schema migration; historical status values are not backfilled. Extracted field `source` uses the `ExtractionSource` enum with `Ocr`, `DocumentIntelligence`, `Llm`, `Rule`, and `Human`; the Azure analyzer returns `DocumentIntelligence`.
+Upload creates `Unknown` / `Uploaded`; analysis sets `Invoice` and moves unsaved documents through `Processing` to `ReviewRequired` or `Failed`; invoice creation/update sets `Invoice` / `Saved`. Existing `Saved` status survives reanalysis, and saving during analysis likewise preserves `Saved`. `Queued`, `Approved`, and `Rejected` are reserved and have no implemented action. `Saved` is the integer enum value 7 and requires no schema migration; historical status values are not backfilled. Extracted field `source` uses the `ExtractionSource` enum with `Ocr`, `DocumentIntelligence`, `Llm`, `Rule`, and `Human`; the Azure analyzer returns `DocumentIntelligence`.
 
 ## Error behavior
 
 | Condition | Current behavior |
 | --- | --- |
+| Missing or expired Wida session on a data route | `401` |
+| Missing or invalid user-bound antiforgery token on a mutation | `400` with title `Session verification failed` |
+| Missing or foreign Origin on a Next.js proxy mutation | Proxy returns `403` before contacting the API |
 | Invalid JSON, incompatible field type, or other model-binding failure | Framework-generated `400` response under `[ApiController]` |
 | Empty, unsupported, disguised, or MIME-mismatched upload | Structured `400` with `errors.file` |
 | Upload exceeds 20 MiB | `413`; application-handled failures contain `errors.file`, while earlier host rejections may differ |
@@ -305,6 +308,8 @@ Invoice create/update errors are mapped by the invoice controller to `applicatio
   }
 }
 ```
+
+Document status uses optimistic concurrency. The async persistence path reconciles a conflict involving `Saved` and retries once; unrelated or repeated conflicts remain errors. This is not general conflict merging for simultaneous invoice edits. See [concurrency handling](architecture.md#concurrent-invoice-saving-and-extraction).
 
 The existing document uniqueness constraint also maps concurrent duplicate creation to `409`. Unexpected persistence and infrastructure failures still become HTTP `500`; the response body depends on the environment and host. There is no global exception middleware.
 
