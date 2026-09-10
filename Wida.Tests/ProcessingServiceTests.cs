@@ -1,3 +1,5 @@
+using Microsoft.Data.Sqlite;
+using Wida.Bll.Dtos.Invoices;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -204,6 +206,64 @@ public class ProcessingServiceTests
         Assert.Equal(DocumentStatus.Saved, (await persisted.Documents.SingleAsync()).Status);
     }
 
+    [Theory]
+    [InlineData("completed")]
+    [InlineData("failed")]
+    [InlineData("cancelled")]
+    public async Task Invoice_saved_during_analysis_keeps_saved_status(string outcome)
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        using var cancellation = new CancellationTokenSource();
+        var service = fixture.Service(new StubAnalyzer(async (_, _) =>
+        {
+            // A second request saves while the processing context still tracks Processing.
+            await using var saveContext = fixture.OpenContext();
+            var invoices = new InvoiceService(new InvoiceRepository(saveContext), new DocumentRepository(saveContext));
+            await invoices.CreateAsync(new CreateInvoiceRequest
+            {
+                DocumentId = fixture.Document.Id, SupplierName = "Supplier", InvoiceNumber = "INV-1",
+                InvoiceDate = new DateOnly(2026, 9, 10), TotalAmount = 100m
+            });
+            if (outcome == "failed") throw new IOException("Analysis unavailable.");
+            if (outcome == "cancelled") cancellation.Cancel();
+            return new DocumentAnalysisResult { RawResult = "{}", Fields = [Field("VendorName", "Supplier", 0.99m)] };
+        }));
+
+        if (outcome == "cancelled")
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.ProcessInvoiceAsync(fixture.Document.Id, cancellation.Token));
+        else
+            await service.ProcessInvoiceAsync(fixture.Document.Id, cancellation.Token);
+
+        await using var persisted = fixture.OpenContext();
+        Assert.Equal(DocumentStatus.Saved, (await persisted.Documents.SingleAsync()).Status);
+        Assert.Equal("INV-1", (await persisted.Invoices.SingleAsync()).InvoiceNumber);
+        var run = await persisted.ProcessingRuns.Include(run => run.ExtractedFields).SingleAsync();
+        Assert.Equal(outcome == "completed" ? ProcessingStatus.Completed : ProcessingStatus.Failed, run.Status);
+        Assert.Equal(outcome == "completed" ? 1 : 0, run.ExtractedFields.Count);
+    }
+
+    [Fact]
+    public async Task Invoice_save_reconciles_an_extraction_status_change_after_document_was_loaded()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        // The invoice request has already loaded its document when extraction finishes.
+        await using (var extractionContext = fixture.OpenContext())
+        {
+            var document = await extractionContext.Documents.SingleAsync();
+            document.Status = DocumentStatus.ReviewRequired;
+            await extractionContext.SaveChangesAsync();
+        }
+        var invoices = new InvoiceService(new InvoiceRepository(fixture.Context), new DocumentRepository(fixture.Context));
+        await invoices.CreateAsync(new CreateInvoiceRequest
+        {
+            DocumentId = fixture.Document.Id, SupplierName = "Supplier", InvoiceNumber = "INV-1",
+            InvoiceDate = new DateOnly(2026, 9, 10), TotalAmount = 100m
+        });
+        await using var persisted = fixture.OpenContext();
+        Assert.Equal(DocumentStatus.Saved, (await persisted.Documents.SingleAsync()).Status);
+        Assert.Single(await persisted.Invoices.ToListAsync());
+    }
+
     private static AnalyzedField Field(string name, object value, decimal? confidence) => new()
     {
         Name = name,
@@ -228,13 +288,19 @@ public class ProcessingServiceTests
 
     private sealed class Fixture : IAsyncDisposable
     {
-        private readonly DbContextOptions<WidaDbContext> _options = new DbContextOptionsBuilder<WidaDbContext>()
-            .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        private readonly SqliteConnection _connection = new("Data Source=:memory:");
+        private readonly DbContextOptions<WidaDbContext> _options;
 
         public WidaDbContext Context { get; }
         public Document Document { get; } = new() { StoragePath = "/test/invoice.pdf", OriginalFileName = "invoice.pdf" };
 
-        private Fixture() => Context = OpenContext();
+        private Fixture()
+        {
+            _connection.Open();
+            _options = new DbContextOptionsBuilder<WidaDbContext>().UseSqlite(_connection).Options;
+            Context = OpenContext();
+            Context.Database.EnsureCreated();
+        }
 
         public static async Task<Fixture> CreateAsync()
         {
@@ -251,6 +317,10 @@ public class ProcessingServiceTests
         public ProcessingService Service(IDocumentAnalyzer analyzer) => new(
             new ProcessingRunRepository(Context), new DocumentRepository(Context), analyzer);
 
-        public ValueTask DisposeAsync() => Context.DisposeAsync();
+        public async ValueTask DisposeAsync()
+        {
+            await Context.DisposeAsync();
+            await _connection.DisposeAsync();
+        }
     }
 }

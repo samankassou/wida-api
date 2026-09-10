@@ -33,6 +33,7 @@ public class DocumentConfiguration : IEntityTypeConfiguration<Document>
             .IsRequired();
 
         builder.Property(x => x.Status)
+            .IsConcurrencyToken()
             .IsRequired();
 
         builder.Property(x => x.UploadedAt)

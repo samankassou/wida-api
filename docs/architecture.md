@@ -11,7 +11,7 @@ The solution contains three application projects and an automated test project, 
 | `Wida.Api` | HTTP routing, upload file storage, JSON serialization, configuration, and OpenAPI/Scalar. | [Program.cs](../Wida.Api/Program.cs), [controllers](../Wida.Api/Controllers) |
 | `Wida.Bll` | Document, invoice, and processing workflows; DTO mapping; invoice validation. | [services](../Wida.Bll/Services), [DTOs](../Wida.Bll/Dtos), [InvoiceValidator](../Wida.Bll/Validators/InvoiceValidator.cs) |
 | `Wida.Dal` | EF Core entities, PostgreSQL mappings and migrations, repositories, analysis contracts/models, and the Azure analyzer. | [WidaDbContext](../Wida.Dal/Persistence/WidaDbContext.cs), [repositories](../Wida.Dal/Repositories), [AzureDocumentAnalyzer](../Wida.Dal/Services/AzureDocumentAnalyzer.cs) |
-| `Wida.Tests` | Automated workflow and extraction regression tests using Azure response fixtures and an in-memory database. | [tests](../Wida.Tests) |
+| `Wida.Tests` | Automated workflow and extraction regression tests using Azure response fixtures, SQLite transaction tests, and EF InMemory fixtures. | [tests](../Wida.Tests) |
 
 Declared project references are `Wida.Api → Wida.Bll`, `Wida.Api → Wida.Dal`, and `Wida.Bll → Wida.Dal`. Startup calls `AddDal(configuration)` and `AddBll()` to register the database context, repositories, analyzer, and services with scoped lifetimes.
 
@@ -78,3 +78,7 @@ Uploaded files must remain accessible at their recorded filesystem paths. Preser
 OpenAPI and Scalar routes are mapped only in Development. Startup configures Google OpenID Connect, Wida cookie sessions, a default authenticated-user policy, and antiforgery validation for controller mutations. The frontend is the public HTTPS origin; the private API uses the configured public scheme instead of redirecting proxy requests. There is no CORS policy, global exception handler, background processing, or health-check endpoint. See [authentication](authentication.md) for the pilot allowlist and deployment.
 
 `Users` stores the stable Google subject and local identity. `Documents.OwnerUserId` is stamped at persistence time. Global query filters scope all five document-related entities to `ICurrentUser.UserId`, and save guards also reject foreign-parent writes and ownership changes. Legacy documents remain unowned and inaccessible until explicitly assigned by a trusted operator.
+
+### Concurrent invoice saving and extraction
+
+Document status is an optimistic concurrency token. If invoice saving overlaps an extraction status update, `WidaDbContext.SaveChangesAsync` reconciles that specific conflict with `Saved` taking precedence and retries once. Other conflicts still fail. This uses the existing status column and requires no database schema change. Processing tests use SQLite transactions to verify that a failed write rolls back before retrying, including extracted fields and invoice insertion.

@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Wida.Dal.Entities;
+using Wida.Dal.Enums;
 using Wida.Dal.Services.Interfaces;
 
 namespace Wida.Dal.Persistence;
@@ -60,7 +61,33 @@ public class WidaDbContext(DbContextOptions<WidaDbContext> options, ICurrentUser
             EnsureAllOwned(check.Ids, visibleIds.ToHashSet());
         }
 
-        return await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+        try
+        {
+            return await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException conflict)
+        {
+            // Invoice saving and extraction can finish in either order. Saved wins.
+            // Only reconcile this status transition; other conflicts remain errors.
+            foreach (var entry in conflict.Entries)
+            {
+                if (entry.Entity is not Document document || entry.State != EntityState.Modified)
+                    throw;
+                var persisted = await entry.GetDatabaseValuesAsync(cancellationToken);
+                if (persisted is null
+                    || persisted.GetValue<Guid?>(nameof(Document.OwnerUserId)) != CurrentUserId)
+                    throw;
+                var status = persisted.GetValue<DocumentStatus>(nameof(Document.Status));
+                if (status == entry.OriginalValues.GetValue<DocumentStatus>(nameof(Document.Status))
+                    || (status != DocumentStatus.Saved && document.Status != DocumentStatus.Saved))
+                    throw;
+                document.Status = DocumentStatus.Saved;
+                entry.Property(nameof(Document.Status)).OriginalValue = status;
+            }
+            // One retry is sufficient for the terminal Saved transition. A further
+            // conflict is surfaced rather than retrying indefinitely.
+            return await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+        }
     }
 
     private List<(HashSet<Guid> Ids, IQueryable<Guid> VisibleIds)> PrepareOwnershipChecks()

@@ -36,7 +36,7 @@ dotnet build Wida.slnx
 dotnet test Wida.slnx
 ```
 
-`Wida.Tests` exercises the analysis workflow with Azure response fixtures and an in-memory database. The [build check](Wida.Api/README.md#build-check) also describes verification against your own PostgreSQL database and Azure resource.
+`Wida.Tests` exercises the analysis workflow with Azure response fixtures, SQLite for transactional processing/concurrency tests, and EF InMemory for the remaining service fixtures. The [build check](Wida.Api/README.md#build-check) also describes verification against your own PostgreSQL database and Azure resource.
 
 ## Licence
 

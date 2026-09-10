@@ -80,6 +80,7 @@ namespace Wida.Dal.Migrations
                         .HasColumnType("uuid");
 
                     b.Property<int>("Status")
+                        .IsConcurrencyToken()
                         .HasColumnType("integer");
 
                     b.Property<string>("StoragePath")
