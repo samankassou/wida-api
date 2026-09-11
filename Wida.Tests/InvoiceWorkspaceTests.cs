@@ -41,13 +41,16 @@ public class InvoiceWorkspaceTests
     }
 
     [Fact]
-    public void Initial_migration_matches_the_PostgreSql_model_and_requires_document_ownership()
+    public void Migrations_match_the_PostgreSql_model_and_require_document_ownership()
     {
         using var context = new WidaDbContext(new DbContextOptionsBuilder<WidaDbContext>()
             .UseNpgsql("Host=localhost;Database=migration_check;Username=test;Password=test")
             .Options, TestCurrentUser.Default);
         Assert.False(context.Database.HasPendingModelChanges());
-        Assert.EndsWith("_InitialCreate", Assert.Single(context.Database.GetMigrations()));
+        Assert.Collection(context.Database.GetMigrations(),
+            migration => Assert.EndsWith("_InitialCreate", migration),
+            migration => Assert.EndsWith("_PublicTrial", migration),
+            migration => Assert.EndsWith("_UserRoles", migration));
         Assert.False(context.Model.FindEntityType(typeof(Document))!.FindProperty(nameof(Document.OwnerUserId))!.IsNullable);
     }
 

@@ -51,7 +51,7 @@ public sealed class ProcessingControllerTests
 
     private sealed class UnavailableQueue : IInvoiceQueue
     {
-        public Task<ProcessingRunResponse> EnqueueAsync(Guid documentId, CancellationToken cancellationToken = default) =>
+        public Task<ProcessingRunResponse> EnqueueAsync(Guid documentId, CancellationToken cancellationToken = default, bool reanalyze = false) =>
             throw new QueueUnavailableException(new IOException("Broker offline"));
     }
 
@@ -59,12 +59,12 @@ public sealed class ProcessingControllerTests
     {
         public ProcessingRunResponse Run { get; } = new(Guid.NewGuid(), Guid.NewGuid(), Wida.Dal.Enums.ProcessingStatus.Pending,
             "AzureDocumentIntelligence", "prebuilt-invoice", DateTime.UtcNow, null, null, null, []);
-        public Task<ProcessingRunResponse> EnqueueAsync(Guid documentId, CancellationToken cancellationToken = default) => Task.FromResult(Run);
+        public Task<ProcessingRunResponse> EnqueueAsync(Guid documentId, CancellationToken cancellationToken = default, bool reanalyze = false) => Task.FromResult(Run);
     }
 
     private sealed class MissingQueue : IInvoiceQueue
     {
-        public Task<ProcessingRunResponse> EnqueueAsync(Guid documentId, CancellationToken cancellationToken = default) =>
+        public Task<ProcessingRunResponse> EnqueueAsync(Guid documentId, CancellationToken cancellationToken = default, bool reanalyze = false) =>
             throw new DocumentNotFoundException(documentId);
     }
 

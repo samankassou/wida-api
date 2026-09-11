@@ -82,7 +82,7 @@ User Secrets are loaded in Development. Supply deployment values through environ
 
 The web project already has `UserSecretsId` configured, so `dotnet user-secrets init` is unnecessary. Replace any sample Azure endpoint in local Development settings with your resource endpoint. An `appsettings.Local.json` file is not loaded by the current startup code.
 
-Uploads are written beneath `<content-root>/uploads` with generated filenames and the original extension. Metadata records the exact absolute path. If copying or metadata persistence fails, the controller attempts to remove the uploaded file. The process needs write access there; preserve these files along with the database because analysis reads the stored file path. Original PDF/image files are available through `GET /api/documents/{id}/content`, with range support; add `?download=true` to download. Uploads accept PDF, PNG, JPEG and TIFF up to 20 MiB and verify extension, MIME type and format signature.
+Uploads are written beneath `<content-root>/uploads` with generated filenames and the original extension. Metadata records the exact absolute path. If copying or metadata persistence fails, the controller attempts to remove the uploaded file. The process needs write access there; preserve these files along with the database because analysis reads the stored file path. Original PDF/image files are available through `GET /api/documents/{id}/content`, with range support; add `?download=true` to download. Uploads accept PDF, PNG, JPEG and TIFF up to 4 MiB and verify extension, MIME type and format signature.
 
 ## API endpoints
 
@@ -94,7 +94,7 @@ JSON uses camelCase property names and string enum values such as `Uploaded`, `P
 | GET | `/api/documents/{id}` | Get document metadata; `404` if absent. |
 | GET | `/api/documents/workspace?limit=100` | Latest document summaries with invoice and latest processing run. Limit 1–500, default 100. |
 | GET | `/api/documents/{id}/content` | Inline original PDF/image bytes with ranges; `?download=true` for attachment. |
-| POST | `/api/documents` | Upload multipart field `file`; returns `201` with document metadata and a Location header. Invalid files return structured `400`; files over 20 MiB return `413`. |
+| POST | `/api/documents` | Upload multipart field `file`; returns `201` with document metadata and a Location header. Invalid files return structured `400`; files over 4 MiB return `413`. |
 | POST | `/api/invoices` | Create one invoice with optional line items for an existing document; returns `201` and a Location header. |
 | GET | `/api/invoices` | List saved invoices and their lines, newest first. |
 | PUT | `/api/invoices/{id}` | Replace invoice fields/lines using the create request shape and unchanged document ID; returns `200`. |
@@ -245,3 +245,7 @@ Wida API is licensed under the [MIT License](../LICENSE).
 Initialize an empty database using the committed `InitialCreate` migration. The worker starts with the API by default and needs an always-running host, private RabbitMQ connectivity, and shared durable originals across replicas. See [processing queue](../docs/processing-queue.md) for setup, pausing workers and PostgreSQL integration tests. Trial page credits and F0-specific upload/page validation remain separate public-launch work.
 
 Configure `RabbitMQ__Uri` (for example, a private AMQP URI supplied through secrets). For a native RabbitMQ service on the VPS or another server, see [RabbitMQ setup](../docs/processing-queue.md) and the [configuration example](../deploy/rabbitmq.conf). PostgreSQL stores analysis state; RabbitMQ distributes messages.
+
+## Public beta
+
+Google sign-in now supports public access with 4 lifetime analysis pages, a 400-page monthly application budget, 2-page/4-MiB files, 10 documents per account and 30-day original retention. See [deployment and operator instructions](../docs/public-beta.md).

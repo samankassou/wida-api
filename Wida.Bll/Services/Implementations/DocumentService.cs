@@ -90,7 +90,8 @@ public class DocumentService : IDocumentService
             document.ContentType,
             document.DocumentType,
             document.Status,
-            document.UploadedAt
+            document.UploadedAt,
+            document.PageCount
         );
     }
 }

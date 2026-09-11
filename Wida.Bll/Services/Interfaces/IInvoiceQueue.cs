@@ -4,5 +4,5 @@ namespace Wida.Bll.Services.Interfaces;
 
 public interface IInvoiceQueue
 {
-    Task<ProcessingRunResponse> EnqueueAsync(Guid documentId, CancellationToken cancellationToken = default);
+    Task<ProcessingRunResponse> EnqueueAsync(Guid documentId, CancellationToken cancellationToken = default, bool reanalyze = false);
 }

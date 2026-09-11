@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.RateLimiting;
 using System.Text.Json.Serialization;
 using Scalar.AspNetCore;
 using Wida.Dal;
@@ -50,7 +51,73 @@ builder.Services.AddSingleton<Wida.Bll.Services.Interfaces.IAnalysisJobPublisher
 if (builder.Configuration.GetValue("ProcessingQueue:Enabled", true))
     builder.Services.AddHostedService<Wida.Api.Processing.InvoiceQueueWorker>();
 
+builder.Services.AddHostedService<Wida.Api.Processing.OriginalRetentionWorker>();
+builder.Services.AddScoped<TrialChallenge>();
+
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = 429;
+    options.GlobalLimiter = System.Threading.RateLimiting.PartitionedRateLimiter.CreateChained(
+        System.Threading.RateLimiting.PartitionedRateLimiter.Create<HttpContext, string>(context =>
+            context.User.IsInRole("Admin")
+                ? System.Threading.RateLimiting.RateLimitPartition.GetNoLimiter("admin")
+                : System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
+                context.Connection.RemoteIpAddress?.ToString() ?? "unknown", _ => new()
+                { PermitLimit = 600, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 })),
+        System.Threading.RateLimiting.PartitionedRateLimiter.Create<HttpContext, string>(context =>
+            context.User.IsInRole("Admin")
+                ? System.Threading.RateLimiting.RateLimitPartition.GetNoLimiter("admin")
+                : System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
+                (context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "anonymous")
+                    + (HttpMethods.IsGet(context.Request.Method) ? ":read" : ":write"), _ => new()
+                { PermitLimit = HttpMethods.IsGet(context.Request.Method) ? 120 : 12,
+                    Window = TimeSpan.FromMinutes(1), QueueLimit = 0 })));
+});
 var app = builder.Build();
+
+// Roles can only be assigned by a trusted operator, never by a sign-up payload.
+if (builder.Configuration["set-user-role"] is { } roleEmail)
+{
+    var roleName = builder.Configuration["role"];
+    if (roleName is not ("User" or "Admin")) throw new ArgumentException("--role must be User or Admin.");
+    var role = Enum.Parse<Wida.Dal.Enums.UserRole>(roleName);
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<Wida.Dal.Persistence.WidaDbContext>();
+    await using var transaction = await db.Database.BeginTransactionAsync();
+    await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(73190421)");
+    var normalized = roleEmail.Trim().ToLowerInvariant();
+    var users = await db.Users.Where(x => x.Email == normalized).ToListAsync();
+    if (users.Count != 1) throw new ArgumentException("Expected one registered Google account for this email. Sign in first; resolve ambiguous identities before assigning a role.");
+    users[0].Role = role;
+    await db.SaveChangesAsync();
+    await transaction.CommitAsync();
+    Console.WriteLine($"Role {role} assigned to {normalized}; effective on the next request.");
+    return;
+}
+
+// Operator-only local command; no public endpoint can grant itself credit.
+if (builder.Configuration["grant-credit-user"] is { } creditUser)
+{
+    if (!Guid.TryParse(creditUser, out var userId)
+        || !int.TryParse(builder.Configuration["grant-credit-pages"], out var pages) || pages is < 1 or > 400)
+        throw new ArgumentException("Supply --grant-credit-user UUID --grant-credit-pages 1..400.");
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<Wida.Dal.Persistence.WidaDbContext>();
+    var affected = await db.Users.Where(x => x.Id == userId).ExecuteUpdateAsync(update => update
+        .SetProperty(x => x.AnalysisPagesGranted, x => x.AnalysisPagesGranted + pages)
+        .SetProperty(x => x.CreditRequestedAt, (DateTime?)null));
+    if (affected != 1) throw new ArgumentException("Unknown user.");
+    Console.WriteLine($"Granted {pages} pages to {userId}. The global monthly limit remains unchanged.");
+    return;
+}
+if (builder.Configuration.GetValue("list-credit-requests", false))
+{
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<Wida.Dal.Persistence.WidaDbContext>();
+    foreach (var user in await db.Users.AsNoTracking().Where(x => x.CreditRequestedAt != null).OrderBy(x => x.CreditRequestedAt).ToListAsync())
+        Console.WriteLine($"{user.Id} | {user.Email} | remaining: {user.AnalysisPagesGranted - user.AnalysisPagesUsed} | {user.CreditRequestedAt:O}");
+    return;
+}
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
@@ -69,8 +136,28 @@ app.Use(async (context, next) =>
     context.Response.Headers.CacheControl = "no-store";
     await next(context);
 });
+app.Use(async (context, next) =>
+{
+    try { await next(context); }
+    catch (Wida.Bll.Exceptions.TrialLimitException ex)
+    {
+        context.Response.StatusCode = ex.Status;
+        await context.Response.WriteAsJsonAsync(new { title = "Limite de la bêta", detail = ex.Message });
+    }
+});
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseRateLimiter();
+app.Use(async (context, next) =>
+{
+    var path = (context.Request.Path.Value ?? "").TrimEnd('/');
+    if (HttpMethods.IsPost(context.Request.Method)
+        && (path.Equals("/api/documents", StringComparison.OrdinalIgnoreCase)
+            || path.EndsWith("/invoice", StringComparison.OrdinalIgnoreCase))
+        && !context.RequestServices.GetRequiredService<TrialChallenge>().IsVerified(context))
+        throw new Wida.Bll.Exceptions.TrialLimitException("Complétez la vérification anti-robot dans le bandeau de votre espace, puis réessayez.", 403);
+    await next(context);
+});
 
 app.MapControllers();
 

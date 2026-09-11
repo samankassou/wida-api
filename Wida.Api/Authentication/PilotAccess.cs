@@ -24,10 +24,14 @@ public sealed class PilotAccess(IConfiguration configuration, IWebHostEnvironmen
 
     public string CallbackUrl => PublicOrigin + "/api/wida/auth/callback";
 
+    public bool IsConfiguredAdmin(string? email) => !string.IsNullOrWhiteSpace(email)
+        && string.Equals(email.Trim(), configuration["Authentication:AdminEmail"]?.Trim(), StringComparison.OrdinalIgnoreCase);
+
     public bool IsInvited(string? email)
     {
         if (string.IsNullOrWhiteSpace(email) || !MailAddress.TryCreate(email, out var address)
             || !string.Equals(address.Address, email.Trim(), StringComparison.OrdinalIgnoreCase)) return false;
+        if (IsConfiguredAdmin(email) || configuration.GetValue("Authentication:PublicBeta", false)) return true;
         return configuration.GetSection("Authentication:AllowedEmails").Get<string[]>()?
             .Any(invited => string.Equals(invited?.Trim(), email.Trim(), StringComparison.OrdinalIgnoreCase)) == true;
     }

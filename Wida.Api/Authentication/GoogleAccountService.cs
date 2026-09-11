@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using Wida.Dal.Enums;
 using Microsoft.EntityFrameworkCore;
 using Wida.Dal.Entities;
 using Wida.Dal.Persistence;
@@ -14,9 +15,10 @@ public sealed class GoogleAccountService(WidaDbContext db, PilotAccess access)
         var email = google.FindFirstValue("email");
         if (string.IsNullOrWhiteSpace(subject) || subject.Length > 255
             || !bool.TryParse(google.FindFirstValue("email_verified"), out var verified) || !verified
-            || !access.IsInvited(email)) return null;
+            || string.IsNullOrWhiteSpace(email)) return null;
 
         var user = await db.Users.SingleOrDefaultAsync(x => x.GoogleSubject == subject, cancellationToken);
+        if (user?.Role != UserRole.Admin && !access.IsInvited(email)) return null;
         if (user is null)
         {
             user = new AppUser { GoogleSubject = subject, Email = email!.Trim().ToLowerInvariant(),
@@ -31,11 +33,13 @@ public sealed class GoogleAccountService(WidaDbContext db, PilotAccess access)
                 if (user is null) throw;
             }
         }
+        if (access.IsConfiguredAdmin(email)) user.Role = UserRole.Admin;
         user.Email = email!.Trim().ToLowerInvariant();
         user.DisplayName = DisplayName(google, email);
         await db.SaveChangesAsync(cancellationToken);
 
         return new ClaimsPrincipal(new ClaimsIdentity([
+            new Claim(ClaimTypes.Role, user.Role.ToString()),
             new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
             new Claim(ClaimTypes.Email, user.Email),
             new Claim(ClaimTypes.Name, user.DisplayName)

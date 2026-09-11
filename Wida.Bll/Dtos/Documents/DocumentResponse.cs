@@ -8,5 +8,6 @@ public record DocumentResponse(
     string ContentType,
     DocumentType DocumentType,
     DocumentStatus Status,
-    DateTime UploadedAt
+    DateTime UploadedAt,
+    int PageCount = 0
 );

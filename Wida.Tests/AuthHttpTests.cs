@@ -43,6 +43,56 @@ public sealed class AuthHttpTests
     }
 
     [Fact]
+    public async Task Configured_verified_google_admin_gets_role_and_demotion_updates_existing_cookie()
+    {
+        await using var factory = new AuthFactory();
+        var configuration = factory.Services.GetRequiredService<IConfiguration>();
+        configuration["Authentication:AdminEmail"] = "admin@example.com";
+        configuration["Authentication:PublicBeta"] = "true";
+        using var browser = new TestBrowser(factory);
+        await browser.GoogleLoginAsync("admin@example.com", "google-admin");
+        Assert.Equal("Admin", (await browser.SessionAsync()).GetProperty("user").GetProperty("role").GetString());
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<WidaDbContext>();
+            var user = await db.Users.SingleAsync();
+            user.Role = Wida.Dal.Enums.UserRole.User;
+            await db.SaveChangesAsync();
+        }
+        Assert.Equal("User", (await browser.SessionAsync()).GetProperty("user").GetProperty("role").GetString());
+    }
+
+    [Fact]
+    public async Task An_unverified_email_cannot_claim_the_configured_admin_account()
+    {
+        await using var factory = new AuthFactory { Verified = false };
+        factory.Services.GetRequiredService<IConfiguration>()["Authentication:AdminEmail"] = "admin@example.com";
+        using var browser = new TestBrowser(factory);
+        await browser.GoogleLoginAsync("admin@example.com", "unverified-admin");
+        Assert.False((await browser.SessionAsync()).GetProperty("authenticated").GetBoolean());
+        using var scope = factory.Services.CreateScope();
+        Assert.Empty(await scope.ServiceProvider.GetRequiredService<WidaDbContext>().Users.ToListAsync());
+    }
+
+    [Fact]
+    public async Task Public_beta_accepts_verified_uninvited_google_user_with_four_lifetime_pages()
+    {
+        await using var factory = new AuthFactory();
+        factory.Services.GetRequiredService<IConfiguration>()["Authentication:PublicBeta"] = "true";
+        using var browser = new TestBrowser(factory);
+        await browser.GoogleLoginAsync("public@example.com", "google-public");
+        Assert.True((await browser.SessionAsync()).GetProperty("authenticated").GetBoolean());
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<WidaDbContext>();
+        Assert.Equal(Wida.Dal.Enums.UserRole.User, (await db.Users.SingleAsync()).Role);
+        Assert.Equal(4, (await db.Users.SingleAsync()).AnalysisPagesGranted);
+        await browser.GoogleLoginAsync("public@example.com", "google-public");
+        Assert.Single(await db.Users.ToListAsync());
+        Assert.Equal(Wida.Dal.Enums.UserRole.User, (await db.Users.SingleAsync()).Role);
+        Assert.Equal(4, (await db.Users.SingleAsync()).AnalysisPagesGranted);
+    }
+
+    [Fact]
     public async Task Google_code_flow_creates_local_session_with_pkce_and_verified_invitation()
     {
         await using var factory = new AuthFactory();
@@ -140,7 +190,7 @@ public sealed class AuthHttpTests
         var aliceSession = await alice.SessionAsync();
         var csrf = aliceSession.GetProperty("csrfToken").GetString();
         using var upload = new MultipartFormDataContent();
-        var file = new ByteArrayContent("%PDF-1.7\nowned-test"u8.ToArray());
+        var file = new ByteArrayContent(DocumentsControllerTests.ValidPdf());
         file.Headers.ContentType = new("application/pdf");
         upload.Add(file, "file", "private.pdf");
         var uploaded = await alice.SendAsync("POST", "/api/documents", upload, csrf);
@@ -181,13 +231,14 @@ public sealed class AuthHttpTests
             builder.UseSetting("Authentication:PublicOrigin", "http://localhost:3000");
             builder.UseSetting("Authentication:Google:ClientId", "pilot-test-client");
             builder.UseSetting("Authentication:Google:ClientSecret", "pilot-test-secret");
+            builder.UseSetting("Authentication:PublicBeta", "false");
             builder.UseSetting("Authentication:AllowedEmails:0", "alice@example.com");
             builder.UseSetting("Authentication:AllowedEmails:1", "bob@example.com");
             builder.ConfigureServices(services =>
             {
                 services.RemoveAll<DbContextOptions<WidaDbContext>>();
                 services.RemoveAll<IDbContextOptionsConfiguration<WidaDbContext>>();
-                services.AddDbContext<WidaDbContext>(options => options.UseInMemoryDatabase(_database));
+                services.AddDbContext<WidaDbContext>(options => options.UseInMemoryDatabase(_database).ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.InMemoryEventId.TransactionIgnoredWarning)));
                 services.PostConfigure<OpenIdConnectOptions>(WidaAuthentication.GoogleScheme, options =>
                 {
                     var key = new RsaSecurityKey(_rsa) { KeyId = "test-key" };

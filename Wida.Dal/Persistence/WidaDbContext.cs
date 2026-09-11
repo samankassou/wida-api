@@ -9,6 +9,8 @@ public class WidaDbContext(DbContextOptions<WidaDbContext> options, ICurrentUser
 {
     private Guid? CurrentUserId => currentUser.UserId;
 
+    public DbSet<AnalysisBudget> AnalysisBudgets => Set<AnalysisBudget>();
+
     public DbSet<AppUser> Users => Set<AppUser>();
 
     public DbSet<Document> Documents => Set<Document>();
@@ -26,6 +28,11 @@ public class WidaDbContext(DbContextOptions<WidaDbContext> options, ICurrentUser
         modelBuilder.ApplyConfigurationsFromAssembly(
             typeof(WidaDbContext).Assembly);
 
+        modelBuilder.Entity<AppUser>().Property(x => x.AnalysisPagesGranted).HasDefaultValue(4);
+        modelBuilder.Entity<Document>().Property(x => x.ContentHash).HasMaxLength(64);
+        modelBuilder.Entity<Document>().HasIndex(x => new { x.OwnerUserId, x.ContentHash }).IsUnique();
+        modelBuilder.Entity<AnalysisBudget>().Property(x => x.Id).HasMaxLength(7);
+        modelBuilder.Entity<ProcessingRun>().Property(x => x.BudgetMonth).HasMaxLength(7);
         // Each filter is also applied to direct child-entity queries, not just includes.
         modelBuilder.Entity<Document>().HasQueryFilter(document =>
             CurrentUserId != null && document.OwnerUserId == CurrentUserId);

@@ -1,3 +1,9 @@
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Wida.Dal.Persistence;
+using Wida.Dal.Entities;
+using UglyToad.PdfPig.Writer;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -17,15 +23,23 @@ public sealed class DocumentsControllerTests : IDisposable
     private readonly string _contentRoot = Path.Combine(
         Path.GetTempPath(), "wida-upload-tests", Guid.NewGuid().ToString());
 
+    private readonly SqliteConnection connection = new("Data Source=:memory:");
+    private readonly WidaDbContext db;
+
     public DocumentsControllerTests()
     {
         Directory.CreateDirectory(_contentRoot);
+        connection.Open();
+        db = new WidaDbContext(new DbContextOptionsBuilder<WidaDbContext>().UseSqlite(connection).Options, TestCurrentUser.Default);
+        db.Database.EnsureCreated();
+        db.Users.Add(new AppUser { Id = TestCurrentUser.Default.UserId!.Value, GoogleSubject = "upload-user" });
+        db.SaveChanges();
     }
 
     [Fact]
     public async Task Upload_PersistsCompleteFileAtThePathGivenToTheDocumentService()
     {
-        byte[] contents = "%PDF-1.7\nexample invoice"u8.ToArray();
+        byte[] contents = ValidPdf();
         using var source = new MemoryStream(contents);
         var file = new FormFile(source, 0, source.Length, "file", "invoice.pdf")
         {
@@ -42,9 +56,12 @@ public sealed class DocumentsControllerTests : IDisposable
             Assert.Equal(Path.Combine(_contentRoot, "uploads"), Path.GetDirectoryName(path));
             Assert.Equal(contents, await File.ReadAllBytesAsync(path, token));
             storedPath = path;
+            db.Documents.Add(new Document { Id = document.Id, OriginalFileName = fileName, ContentType = contentType, StoragePath = path });
+            await db.SaveChangesAsync(token);
             return document;
         });
 
+        service.Record = document;
         var result = await CreateController(service).Upload(file, CancellationToken.None);
 
         var created = Assert.IsType<CreatedAtActionResult>(result);
@@ -58,7 +75,7 @@ public sealed class DocumentsControllerTests : IDisposable
     [Fact]
     public async Task Upload_RemovesFileWhenSavingDocumentMetadataFails()
     {
-        using var source = new MemoryStream("%PDF-1.7\nexample invoice"u8.ToArray());
+        using var source = new MemoryStream(ValidPdf());
         var file = new FormFile(source, 0, source.Length, "file", "invoice.pdf")
         {
             Headers = new HeaderDictionary(),
@@ -112,6 +129,7 @@ public sealed class DocumentsControllerTests : IDisposable
 
     public void Dispose()
     {
+        db.Dispose(); connection.Dispose();
         Directory.Delete(_contentRoot, recursive: true);
     }
 
@@ -198,11 +216,86 @@ public sealed class DocumentsControllerTests : IDisposable
         Assert.IsType<NotFoundResult>(await controller.GetContent(Guid.NewGuid(), default));
     }
 
+    [Fact]
+    public async Task Upload_rejects_three_page_pdf_and_removes_the_original()
+    {
+        var bytes = ValidPdf(3);
+        using var stream = new MemoryStream(bytes);
+        var file = new FormFile(stream, 0, bytes.Length, "file", "three.pdf") { Headers = new HeaderDictionary(), ContentType = "application/pdf" };
+        var service = new StubDocumentService((_, _, _, _) => throw new Exception("Must not persist"));
+        Assert.IsType<BadRequestObjectResult>(await CreateController(service).Upload(file, default));
+        Assert.Empty(Directory.GetFiles(_contentRoot, "*", SearchOption.AllDirectories));
+        Assert.Empty(await db.Documents.ToListAsync());
+    }
+
+    [Fact]
+    public async Task Duplicate_upload_reuses_owner_document_even_when_storage_is_full()
+    {
+        var bytes = ValidPdf();
+        var original = Path.Combine(_contentRoot, "uploads", "existing.pdf");
+        Directory.CreateDirectory(Path.GetDirectoryName(original)!);
+        await File.WriteAllBytesAsync(original, bytes);
+        var document = new Document { StoragePath = original, PageCount = 1,
+            ContentHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)) };
+        db.Documents.Add(document);
+        for (int i = 0; i < 9; i++) db.Documents.Add(new Document());
+        await db.SaveChangesAsync();
+        using var stream = new MemoryStream(bytes);
+        var file = new FormFile(stream, 0, bytes.Length, "file", "renamed.pdf") { Headers = new HeaderDictionary(), ContentType = "application/pdf" };
+        var service = new StubDocumentService((_, _, _, _) => throw new Exception("Must not persist")) { Record = CreateDocument() };
+        Assert.IsType<OkObjectResult>(await CreateController(service).Upload(file, default));
+        Assert.Equal(10, await db.Documents.CountAsync());
+        Assert.Single(Directory.GetFiles(_contentRoot, "*", SearchOption.AllDirectories));
+    }
+
+    [Fact]
+    public async Task Eleventh_document_is_rejected_without_leaking_an_original()
+    {
+        for (int i = 0; i < 10; i++) db.Documents.Add(new Document());
+        await db.SaveChangesAsync();
+        var bytes = ValidPdf();
+        using var stream = new MemoryStream(bytes);
+        var file = new FormFile(stream, 0, bytes.Length, "file", "extra.pdf") { Headers = new HeaderDictionary(), ContentType = "application/pdf" };
+        var service = new StubDocumentService((_, _, _, _) => throw new Exception("Must not persist"));
+        await Assert.ThrowsAsync<Wida.Bll.Exceptions.TrialLimitException>(() => CreateController(service).Upload(file, default));
+        Assert.Empty(Directory.GetFiles(_contentRoot, "*", SearchOption.AllDirectories));
+    }
+
+    [Fact]
+    public async Task Admin_can_upload_more_than_ten_documents_and_more_than_two_pages()
+    {
+        for (int i = 0; i < 10; i++) db.Documents.Add(new Document());
+        await db.SaveChangesAsync();
+        var bytes = ValidPdf(3);
+        using var stream = new MemoryStream(bytes);
+        var file = new FormFile(stream, 0, bytes.Length, "file", "three.pdf") { Headers = new HeaderDictionary(), ContentType = "application/pdf" };
+        var record = CreateDocument();
+        var service = new StubDocumentService(async (name, type, path, token) =>
+        {
+            db.Documents.Add(new Document { Id = record.Id, OriginalFileName = name, ContentType = type, StoragePath = path });
+            await db.SaveChangesAsync(token);
+            return record;
+        }) { Record = record };
+        var controller = CreateController(service);
+        controller.HttpContext.User = new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity([
+            new System.Security.Claims.Claim(System.Security.Claims.ClaimTypes.Role, "Admin")], "test"));
+        Assert.IsType<CreatedAtActionResult>(await controller.Upload(file, default));
+        Assert.Equal(11, await db.Documents.CountAsync());
+        Assert.Equal(3, (await db.Documents.SingleAsync(x => x.Id == record.Id)).PageCount);
+    }
+
     private DocumentsController CreateController(IDocumentService service) =>
         new(service, new TestWebHostEnvironment { ContentRootPath = _contentRoot })
         {
-            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext { RequestServices = new ServiceCollection().AddSingleton(db).BuildServiceProvider() } }
         };
+
+    internal static byte[] ValidPdf(int pages = 1)
+    {
+        var builder = new PdfDocumentBuilder();
+        for (int i = 0; i < pages; i++) builder.AddPage(100, 100);
+        return builder.Build();
+    }
 
     private static DocumentResponse CreateDocument() => new(
         Guid.NewGuid(), "invoice.pdf", "application/pdf", DocumentType.Unknown,
@@ -211,6 +304,7 @@ public sealed class DocumentsControllerTests : IDisposable
     private sealed class StubDocumentService(
         Func<string, string, string, CancellationToken, Task<DocumentResponse>> create) : IDocumentService
     {
+        public DocumentResponse? Record { get; set; }
         public int CreateCalls { get; private set; }
         public DocumentContent? Content { get; set; }
 
@@ -228,8 +322,7 @@ public sealed class DocumentsControllerTests : IDisposable
             return create(fileName, contentType, storagePath, cancellationToken);
         }
 
-        public Task<DocumentResponse?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+        public Task<DocumentResponse?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult(Record);
 
         public Task<IReadOnlyList<DocumentResponse>> GetAllAsync(CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();

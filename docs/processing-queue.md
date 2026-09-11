@@ -65,7 +65,7 @@ This operator-only command does not create a run or bypass ownership on API requ
 
 `POST /api/processing/documents/{documentId}/invoice` returns **202 Accepted** only after RabbitMQ confirms publication and PostgreSQL commits admission. The response includes the run and its status `Location`. Repeating an active request returns the same run without publishing another message. A broker outage returns **503** with `Retry-After: 10`; a new admission is rolled back and the previously uploaded document remains available.
 
-Admission is limited to three active jobs per user and 100 globally. A short PostgreSQL transaction/advisory lock (`73190421`) serializes these business checks; a partial unique index prohibits two active runs for one document. This lock is not used to distribute jobs or elect a worker. These are queue admission limits, not trial page credits or a monthly Azure budget.
+Admission is limited to one active job per user and 100 globally. A short PostgreSQL transaction/advisory lock (`73190421`) serializes these business checks; a partial unique index prohibits two active runs for one document. This lock is not used to distribute jobs or elect a worker. The same lock also protects lifetime page debits and the shared monthly budget; see [public beta](public-beta.md).
 
 To avoid a database outbox and a lost-message gap, publication is confirmed **before** the admission transaction commits. On delivery, the consumer briefly takes the same transaction lock before looking up that one run ID. It therefore waits for admission to commit or roll back. If admission rolled back after RabbitMQ accepted the message, the orphan ID goes to the failed queue. No Azure request is made for an orphan. A network error during confirmation/commit may yield a failed HTTP response despite accepted work; retry the same document or inspect its history. This is not a distributed transaction or an exactly-once guarantee.
 
@@ -93,6 +93,6 @@ dotnet test Wida.slnx
 
 Use disposable services. Tests create/drop randomly named `wida_queue_test_*` databases and `wida.test.*` queues. They cover concurrent admission, two consumers, unacknowledged redelivery/restart, and a confirmed message whose database transaction rolls back. Azure is simulated; live Azure end-to-end validation remains necessary.
 
-Trial page credits, monthly budget enforcement, F0-specific size/page validation, public signup, retention and CAPTCHA remain separate launch work. The upload limit is still 20 MiB; do not open broad public access until the F0 restrictions and budget controls are enforced.
+Public signup, lifetime credits, monthly budget enforcement, F0 file/page validation, original retention and optional Turnstile are implemented. Apply the new migration and follow the [public beta deployment guide](public-beta.md).
 
 References: [RabbitMQ .NET client](https://www.rabbitmq.com/client-libraries/dotnet-api-guide), [publisher confirms](https://www.rabbitmq.com/tutorials/tutorial-seven-dotnet), [quorum queues and dead lettering](https://www.rabbitmq.com/docs/quorum-queues).

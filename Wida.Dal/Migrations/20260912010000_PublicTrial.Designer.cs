@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using Wida.Dal.Persistence;
@@ -11,9 +12,10 @@ using Wida.Dal.Persistence;
 namespace Wida.Dal.Migrations
 {
     [DbContext(typeof(WidaDbContext))]
-    partial class WidaDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260912010000_PublicTrial")]
+    partial class PublicTrial
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -32,7 +34,6 @@ namespace Wida.Dal.Migrations
 
             modelBuilder.Entity("Wida.Dal.Entities.AppUser", b =>
                 {
-                    b.Property<int>("Role").HasColumnType("integer");
                     b.Property<int>("AnalysisPagesGranted").ValueGeneratedOnAdd().HasColumnType("integer").HasDefaultValue(4);
                     b.Property<int>("AnalysisPagesUsed").HasColumnType("integer");
                     b.Property<DateTime?>("CreditRequestedAt").HasColumnType("timestamp with time zone");
@@ -285,7 +286,6 @@ namespace Wida.Dal.Migrations
 
             modelBuilder.Entity("Wida.Dal.Entities.ProcessingRun", b =>
                 {
-                    b.Property<bool>("IsQuotaExempt").HasColumnType("boolean");
                     b.Property<int>("ReservedPages").HasColumnType("integer");
                     b.Property<string>("BudgetMonth").HasMaxLength(7).HasColumnType("character varying(7)");
                     b.Property<Guid>("Id")

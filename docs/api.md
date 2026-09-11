@@ -55,7 +55,7 @@ curl --fail-with-body https://localhost:7127/api/documents \
   -F 'file=@/absolute/path/invoice.pdf;type=application/pdf'
 ```
 
-Uploads accept PDF (`.pdf`), PNG (`.png`), JPEG (`.jpg`, `.jpeg`), and TIFF (`.tif`, `.tiff`) files up to 20 MiB (20 × 1024 × 1024 bytes). Empty, unsupported, mismatched, and disguised files return structured `400` errors under `errors.file`. Oversized files return `413`. Extension, reported MIME type, and format signature are checked; empty or `application/octet-stream` MIME values are accepted when extension and signature agree. This is format identification, not complete document decoding. The application allows 21 MiB of multipart request data to leave room for multipart overhead; host/proxy limits may reject large requests earlier. The stored content type is canonical for the verified format. Original filenames are reduced to a basename and must have at most 255 characters.
+Uploads accept PDF (`.pdf`), PNG (`.png`), JPEG (`.jpg`, `.jpeg`), and TIFF (`.tif`, `.tiff`) files up to 4 MiB (4 × 1024 × 1024 bytes). Empty, unsupported, mismatched, and disguised files return structured `400` errors under `errors.file`. Oversized files return `413`. Extension, reported MIME type, and format signature are checked; empty or `application/octet-stream` MIME values are accepted when extension and signature agree. This is format identification, not complete document decoding. The application allows 5 MiB of multipart request data to leave room for multipart overhead; host/proxy limits may reject large requests earlier. The stored content type is canonical for the verified format. Original filenames are reduced to a basename and must have at most 255 characters.
 
 Files are written to `<content-root>/uploads` under a generated GUID filename with the original extension. The exact absolute file path is saved in document metadata. If copying the file or saving metadata fails, the controller attempts to remove the uploaded file before propagating the error. The document response contains metadata only:
 
@@ -197,7 +197,7 @@ curl --fail-with-body -X POST \
   "https://localhost:7127/api/processing/documents/$DOCUMENT_ID/invoice"
 ```
 
-This endpoint enqueues a durable `Pending` job and returns `202 Accepted` with its processing response and a status `Location`. A repeated request for the same document returns the existing active job. The background worker performs Azure analysis and transitions it to `Running`, then `Completed` or `Failed`. Poll `GET /api/processing/{id}` for results. Admission is limited to three active jobs per user and 100 globally; a full queue returns `429` with `Retry-After: 10`. New admission requires RabbitMQ publisher confirmation; broker unavailability returns `503` and rolls back the new run, preserving the upload. See [queue deployment and recovery](processing-queue.md).
+This endpoint enqueues a durable `Pending` job and returns `202 Accepted` with its processing response and a status `Location`. A repeated request for the same document returns the existing active job. The background worker performs Azure analysis and transitions it to `Running`, then `Completed` or `Failed`. Poll `GET /api/processing/{id}` for results. Admission is limited to one active job per user and 100 globally; a full queue returns `429` with `Retry-After: 10`. New admission requires RabbitMQ publisher confirmation; broker unavailability returns `503` and rolls back the new run, preserving the upload. See [queue deployment and recovery](processing-queue.md).
 
 The analyzer reads only the first document returned by Azure. It extracts these fields when present: `InvoiceId`, `InvoiceDate`, `DueDate`, `VendorName`, `SubTotal`, `TotalTax`, `InvoiceTotal`, and `TotalDiscount`. It also extracts `Items` fields as `Items[0].Description`, `Items[0].Quantity`, etc., using zero-based Azure array indices. Supported line fields are `Description`, `Quantity`, `Unit`, `UnitPrice`, `TaxRate`, `Tax`, and `Amount`. Each field retains its typed normalized value, raw text, confidence, page, bounding polygon, and review flag in the `extractedFields` collection. Empty or non-object rows and absent fields are skipped; no missing values are invented. No analyzed documents results in a `Failed` run. An analyzed document without any of the selected fields can complete with an empty `extractedFields` array.
 
@@ -286,7 +286,7 @@ Upload creates `Unknown` / `Uploaded`; analysis sets `Invoice` and moves unsaved
 | Missing or foreign Origin on a Next.js proxy mutation | Proxy returns `403` before contacting the API |
 | Invalid JSON, incompatible field type, or other model-binding failure | Framework-generated `400` response under `[ApiController]` |
 | Empty, unsupported, disguised, or MIME-mismatched upload | Structured `400` with `errors.file` |
-| Upload exceeds 20 MiB | `413`; application-handled failures contain `errors.file`, while earlier host rejections may differ |
+| Upload exceeds 4 MiB | `413`; application-handled failures contain `errors.file`, while earlier host rejections may differ |
 | Workspace limit outside 1–500 | `400` with `errors.limit` |
 | Record absent on a single-record GET | Explicit `404` |
 | Malformed route GUID | Route does not match; normally `404` |
@@ -340,3 +340,14 @@ Invoice requests and responses include nullable decimal `shippingAmount` and `di
 The analyzer extracts `TotalDiscount` when returned by Azure. Shipping is entered manually: the [Azure invoice schema](https://github.com/Azure-Samples/document-intelligence-code-samples/blob/main/schema/2024-11-30-ga/invoice.md) has no dedicated shipping-charge field. Shipping is never inferred from a difference between totals.
 
 Tax-inclusive line amounts with net unit prices are accepted when the line's tax amount or percentage reconciles the difference within 0.01. If both tax values are supplied, both must agree. Subtotal validation uses the net quantity × unit price for these lines; stored source amounts are unchanged. Lines without tax evidence retain the existing net-amount validation. The review form identifies recognized tax-inclusive amounts and shows the net amount used for the subtotal check.
+
+## Trial endpoints
+
+All trial routes require the normal user session; POST also requires CSRF.
+
+- `GET /api/trial`: lifetime pages remaining, total granted, public monthly availability, credit request state, retention and storage limits, optional CAPTCHA public site key.
+- `POST /api/trial/credits`: records one pending request for manual review; repeating it does not create another request.
+- `POST /api/trial/challenge` with `{ "token": "…" }`: validates the configured managed Turnstile challenge and sets an owner-bound HttpOnly cookie.
+- `POST /api/processing/documents/{id}/invoice?reanalyze=true`: deliberately charges another analysis. Without the parameter, a completed result is reused.
+
+Page or storage exhaustion returns `429` with an explanatory `detail`; missing/unacceptable page counts return `400`; expired originals return `410` on content reads. Limits and reservations are detailed in [public beta](public-beta.md).

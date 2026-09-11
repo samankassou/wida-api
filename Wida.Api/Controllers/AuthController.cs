@@ -22,7 +22,7 @@ public sealed class AuthController(PilotAccess access, IAntiforgery antiforgery)
         {
             authenticated,
             googleConfigured = access.GoogleConfigured,
-            user = authenticated ? new { id = User.FindFirstValue(ClaimTypes.NameIdentifier), email = User.FindFirstValue(ClaimTypes.Email), displayName = User.FindFirstValue(ClaimTypes.Name) } : null,
+            user = authenticated ? new { id = User.FindFirstValue(ClaimTypes.NameIdentifier), email = User.FindFirstValue(ClaimTypes.Email), displayName = User.FindFirstValue(ClaimTypes.Name), role = User.FindFirstValue(ClaimTypes.Role) ?? "User" } : null,
             csrfToken = token.RequestToken
         });
     }

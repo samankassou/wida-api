@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Wida.Dal.Entities;
 using Wida.Dal.Enums;
 using Wida.Dal.Persistence;
@@ -8,7 +9,7 @@ namespace Wida.Bll.Services.Implementations;
 
 // Called only by the RabbitMQ single active consumer while holding its delivery.
 // Each step performs at most one Azure request, then persists its next action.
-public sealed class InvoiceQueueExecutor(WidaDbContext db, IQueuedDocumentAnalyzer analyzer)
+public sealed class InvoiceQueueExecutor(WidaDbContext db, IQueuedDocumentAnalyzer analyzer, IConfiguration? configuration = null)
 {
     public async Task StepAsync(Guid runId, CancellationToken cancellationToken)
     {
@@ -29,11 +30,41 @@ public sealed class InvoiceQueueExecutor(WidaDbContext db, IQueuedDocumentAnalyz
             var submitting = run.AzureOperationId is null;
             if (submitting)
             {
+                if (!string.Equals(configuration?["AzureDocumentIntelligence:Tier"], "S0", StringComparison.OrdinalIgnoreCase)
+                    && (run.Document.PageCount > 2 || (File.Exists(run.Document.StoragePath) && new FileInfo(run.Document.StoragePath).Length > 4 * 1024 * 1024)))
+                {
+                    Fail(run, "AZURE_F0_LIMIT", "Azure F0 accepte 2 pages et 4 Mio maximum. Configurez une ressource S0 pour ce document.");
+                    await db.SaveChangesAsync(cancellationToken);
+                    return;
+                }
+                await using var admission = await db.Database.BeginTransactionAsync(cancellationToken);
+                if (db.Database.IsNpgsql())
+                    await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(73190421)", cancellationToken);
+                if (run.ReservedPages <= 0)
+                {
+                    Fail(run, "TRIAL_RESERVATION_REQUIRED", "Cette ancienne analyse n’a pas de réservation. Importez à nouveau le document.");
+                    await db.SaveChangesAsync(cancellationToken);
+                    await admission.CommitAsync(cancellationToken);
+                    return;
+                }
+                if (run.BudgetMonth != TrialBudget.Month)
+                {
+                    try { await TrialBudget.ReserveMonthAsync(db, run.ReservedPages, cancellationToken, enforceLimit: !run.IsQuotaExempt); }
+                    catch (Wida.Bll.Exceptions.TrialLimitException)
+                    {
+                        Fail(run, "TRIAL_MONTHLY_LIMIT", "Le budget mensuel est épuisé. Utilisez la saisie manuelle.");
+                        await db.SaveChangesAsync(cancellationToken);
+                        await admission.CommitAsync(cancellationToken);
+                        return;
+                    }
+                    run.BudgetMonth = TrialBudget.Month;
+                }
                 run.Status = ProcessingStatus.Running;
                 run.SubmissionStartedAt = DateTime.UtcNow;
                 SetDocumentStatus(run.Document, DocumentStatus.Processing);
                 // Persist the uncertainty marker BEFORE the irreversible network request.
                 await db.SaveChangesAsync(cancellationToken);
+                await admission.CommitAsync(cancellationToken);
             }
             try
             {

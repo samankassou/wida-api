@@ -48,7 +48,7 @@ public sealed class PostgresQueueTests
         var ids = new List<Guid>();
         await using (var db = f.Open())
         {
-            for (var i = 0; i < 8; i++) { var doc = new Document(); db.Documents.Add(doc); ids.Add(doc.Id); }
+            for (var i = 0; i < 8; i++) { var doc = new Document { PageCount = 1 }; db.Documents.Add(doc); ids.Add(doc.Id); }
             await db.SaveChangesAsync();
         }
         var accepted = await Task.WhenAll(ids.Select(async id =>
@@ -57,9 +57,39 @@ public sealed class PostgresQueueTests
             try { await new InvoiceQueue(db, new RecordingJobPublisher()).EnqueueAsync(id); return true; }
             catch (Wida.Bll.Exceptions.QueueCapacityException) { return false; }
         }));
-        Assert.Equal(2, accepted.Count(x => x));
+        Assert.Equal(0, accepted.Count(x => x));
         await using var check = f.Open();
-        Assert.Equal(3, await check.ProcessingRuns.CountAsync());
+        Assert.Equal(1, await check.ProcessingRuns.CountAsync());
+    }
+
+    [PostgresQueueFact]
+    public async Task Concurrent_owners_cannot_overbook_the_last_monthly_page()
+    {
+        await using var f = await Fixture.CreateAsync();
+        var otherOwner = Guid.NewGuid();
+        var otherDocument = Guid.NewGuid();
+        await using (var db = f.Open())
+        {
+            db.Users.Add(new AppUser { Id = otherOwner, GoogleSubject = "other-trial" });
+            db.AnalysisBudgets.Add(new AnalysisBudget { Id = TrialBudget.Month, PagesUsed = 399 });
+            await db.SaveChangesAsync();
+        }
+        await using (var db = new WidaDbContext(f.Options, new TestCurrentUser(otherOwner)))
+        {
+            db.Documents.Add(new Document { Id = otherDocument, PageCount = 1 });
+            await db.SaveChangesAsync();
+        }
+        async Task<bool> Admit(bool other)
+        {
+            await using var db = other ? new WidaDbContext(f.Options, new TestCurrentUser(otherOwner)) : f.Open();
+            try { await new InvoiceQueue(db, new RecordingJobPublisher()).EnqueueAsync(other ? otherDocument : f.DocumentId); return true; }
+            catch (Wida.Bll.Exceptions.TrialLimitException) { return false; }
+        }
+        var results = await Task.WhenAll(Admit(false), Admit(true));
+        Assert.Single(results, x => x);
+        await using var check = f.Open();
+        Assert.Equal(400, (await check.AnalysisBudgets.SingleAsync()).PagesUsed);
+        Assert.Equal(1, await check.Users.SumAsync(x => x.AnalysisPagesUsed));
     }
 
     [RabbitMqQueueFact]
@@ -198,7 +228,7 @@ public sealed class PostgresQueueTests
                 await using var db = f.Open();
                 await db.Database.MigrateAsync();
                 db.Users.Add(new AppUser { Id = TestCurrentUser.Default.UserId!.Value, GoogleSubject = "queue-integration" });
-                db.Documents.Add(new Document { Id = f.DocumentId });
+                db.Documents.Add(new Document { Id = f.DocumentId, PageCount = 1 });
                 await db.SaveChangesAsync();
                 return f;
             }

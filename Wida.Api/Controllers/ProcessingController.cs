@@ -71,13 +71,13 @@ public class ProcessingController : ControllerBase
     [HttpPost("documents/{documentId:guid}/invoice")]
     public async Task<IActionResult> ProcessInvoice(
         Guid documentId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, [FromQuery] bool reanalyze = false)
     {
         try
         {
             var run = await _queue.EnqueueAsync(
                 documentId,
-                cancellationToken);
+                cancellationToken, reanalyze);
 
             return AcceptedAtAction(nameof(GetById), new { id = run.Id }, run);
         }

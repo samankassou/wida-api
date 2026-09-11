@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Configuration;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Wida.Bll.Exceptions;
@@ -40,20 +41,15 @@ public sealed class InvoiceQueueTests
     }
 
     [Fact]
-    public async Task Admission_limits_each_user_to_three_jobs_but_allows_idempotent_retries()
+    public async Task Admission_limits_each_user_to_one_job_but_allows_idempotent_retries()
     {
         await using var f = new Fixture();
         var queue = new InvoiceQueue(f.Db, new RecordingJobPublisher());
         var first = await queue.EnqueueAsync(f.Document.Id);
-        for (var i = 0; i < 2; i++)
-        {
-            var doc = new Document(); f.Db.Documents.Add(doc); await f.Db.SaveChangesAsync();
-            await queue.EnqueueAsync(doc.Id);
-        }
         Assert.Equal(first.Id, (await queue.EnqueueAsync(f.Document.Id)).Id);
-        var fourth = new Document(); f.Db.Documents.Add(fourth); await f.Db.SaveChangesAsync();
+        var fourth = new Document { PageCount = 1 }; f.Db.Documents.Add(fourth); await f.Db.SaveChangesAsync();
         await Assert.ThrowsAsync<QueueCapacityException>(() => queue.EnqueueAsync(fourth.Id));
-        Assert.Equal(3, await f.Db.ProcessingRuns.CountAsync());
+        Assert.Equal(1, await f.Db.ProcessingRuns.CountAsync());
     }
 
     [Fact]
@@ -194,12 +190,94 @@ public sealed class InvoiceQueueTests
         { Assert.Equal(OperationId, operationId); Polls++; OnPoll?.Invoke(); return Task.FromResult(Result); }
     }
 
+    [Fact]
+    public async Task Lifetime_credit_cannot_renew_or_be_bypassed_by_reanalysis()
+    {
+        await using var f = new Fixture();
+        f.Document.PageCount = 2; await f.Db.SaveChangesAsync();
+        var queue = new InvoiceQueue(f.Db, new RecordingJobPublisher());
+        var first = await queue.EnqueueAsync(f.Document.Id);
+        var run = await f.Db.ProcessingRuns.SingleAsync(); run.Status = ProcessingStatus.Completed;
+        await f.Db.SaveChangesAsync();
+        Assert.Equal(first.Id, (await queue.EnqueueAsync(f.Document.Id)).Id);
+        Assert.Equal(2, (await f.Db.Users.SingleAsync()).AnalysisPagesUsed);
+        await queue.EnqueueAsync(f.Document.Id, reanalyze: true);
+        foreach (var r in await f.Db.ProcessingRuns.ToListAsync()) r.Status = ProcessingStatus.Completed;
+        await f.Db.SaveChangesAsync();
+        await Assert.ThrowsAsync<TrialLimitException>(() => queue.EnqueueAsync(f.Document.Id, reanalyze: true));
+        Assert.Equal(4, (await f.Db.Users.SingleAsync()).AnalysisPagesUsed);
+    }
+
+    [Fact]
+    public async Task Monthly_capacity_counts_reservations_before_azure_and_rejects_without_charging_user()
+    {
+        await using var f = new Fixture();
+        f.Document.PageCount = 2;
+        f.Db.AnalysisBudgets.Add(new AnalysisBudget { Id = TrialBudget.Month, PagesUsed = 399 });
+        await f.Db.SaveChangesAsync();
+        await Assert.ThrowsAsync<TrialLimitException>(() => new InvoiceQueue(f.Db, new RecordingJobPublisher()).EnqueueAsync(f.Document.Id));
+        Assert.Empty(await f.Db.ProcessingRuns.ToListAsync());
+        Assert.Equal(0, (await f.Db.Users.SingleAsync()).AnalysisPagesUsed);
+    }
+
+    [Fact]
+    public async Task New_month_submission_rechecks_budget_before_any_azure_call()
+    {
+        await using var f = new Fixture();
+        var queued = await new InvoiceQueue(f.Db, new RecordingJobPublisher()).EnqueueAsync(f.Document.Id);
+        var run = await f.Db.ProcessingRuns.SingleAsync(); run.BudgetMonth = "2000-01";
+        (await f.Db.AnalysisBudgets.SingleAsync()).PagesUsed = 400;
+        await f.Db.SaveChangesAsync();
+        var azure = new FakeAzure();
+        await new InvoiceQueueExecutor(f.Db, azure).StepAsync(queued.Id, default);
+        Assert.Equal(0, azure.Submissions);
+        Assert.Equal("TRIAL_MONTHLY_LIMIT", run.ErrorCode);
+    }
+
+    [Fact]
+    public async Task Admin_ignores_lifetime_monthly_concurrency_and_retention_quotas_but_tracks_shared_usage()
+    {
+        await using var f = new Fixture();
+        var user = await f.Db.Users.SingleAsync();
+        user.Role = UserRole.Admin; user.AnalysisPagesUsed = 4;
+        f.Document.UploadedAt = DateTime.UtcNow.AddDays(-90);
+        f.Db.AnalysisBudgets.Add(new AnalysisBudget { Id = TrialBudget.Month, PagesUsed = 400 });
+        await f.Db.SaveChangesAsync();
+        var queue = new InvoiceQueue(f.Db, new RecordingJobPublisher());
+        await queue.EnqueueAsync(f.Document.Id);
+        for (int i = 0; i < 4; i++)
+        {
+            var document = new Document { PageCount = 1 }; f.Db.Documents.Add(document); await f.Db.SaveChangesAsync();
+            await queue.EnqueueAsync(document.Id);
+        }
+        Assert.Equal(5, await f.Db.ProcessingRuns.CountAsync());
+        Assert.All(await f.Db.ProcessingRuns.ToListAsync(), run => Assert.True(run.IsQuotaExempt));
+        Assert.Equal(4, user.AnalysisPagesUsed);
+        Assert.Equal(405, (await f.Db.AnalysisBudgets.SingleAsync()).PagesUsed);
+    }
+
+    [Fact]
+    public async Task Admin_large_analysis_requires_actual_S0_configuration_without_spending_on_F0()
+    {
+        await using var f = new Fixture();
+        (await f.Db.Users.SingleAsync()).Role = UserRole.Admin;
+        f.Document.PageCount = 3; await f.Db.SaveChangesAsync();
+        var publisher = new RecordingJobPublisher();
+        await Assert.ThrowsAsync<TrialLimitException>(() => new InvoiceQueue(f.Db, publisher).EnqueueAsync(f.Document.Id));
+        Assert.Empty(publisher.Published);
+        var configuration = new Microsoft.Extensions.Configuration.ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["AzureDocumentIntelligence:Tier"] = "S0" }).Build();
+        await new InvoiceQueue(f.Db, publisher, configuration).EnqueueAsync(f.Document.Id);
+        Assert.Single(publisher.Published);
+        Assert.Equal(3, (await f.Db.AnalysisBudgets.SingleAsync()).PagesUsed);
+    }
+
     private sealed class Fixture : IAsyncDisposable
     {
         private readonly SqliteConnection connection = new("Data Source=:memory:");
         private readonly DbContextOptions<WidaDbContext> options;
         public WidaDbContext Db { get; }
-        public Document Document { get; } = new() { StoragePath = "/test/invoice.pdf" };
+        public Document Document { get; } = new() { StoragePath = "/test/invoice.pdf", PageCount = 1 };
         public Fixture()
         {
             connection.Open();

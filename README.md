@@ -14,7 +14,7 @@ Wida is an ASP.NET Core API for uploading documents, recording invoices and line
 
 ## Capabilities
 
-- Upload PDF/PNG/JPEG/TIFF files up to 20 MiB, retrieve metadata, and preview/download originals with byte-range support.
+- Upload PDF/PNG/JPEG/TIFF files up to 4 MiB, retrieve metadata, and preview/download originals with byte-range support.
 - Load a bounded document workspace with saved invoices and latest extraction runs.
 - Create, update, list, and retrieve one invoice per document, with optional line items and field-specific validation errors.
 - Record a manual processing run or request Azure's `prebuilt-invoice` analysis.
@@ -47,3 +47,9 @@ On 10 September 2026, all **81 API tests** passed for commit `2e4011e`. Processi
 This project is licensed under the [MIT License](LICENSE).
 
 Shipping is entered manually and discount can prefill from Azure `TotalDiscount`.
+
+## Public beta
+
+Google sign-in now supports public access with 4 lifetime analysis pages, a 400-page monthly application budget, 2-page/4-MiB files, 10 documents per account and 30-day original retention. See [deployment and operator instructions](docs/public-beta.md).
+
+Two persisted profiles are available: `User` (public trial limits) and `Admin` (no Wida quotas). The configured administrator is assigned on verified Google sign-in; see [profile configuration and migrations](docs/public-beta.md#user-and-administrator-profiles).

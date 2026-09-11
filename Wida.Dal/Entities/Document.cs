@@ -4,6 +4,9 @@ namespace Wida.Dal.Entities;
 
 public class Document
 {
+    public int PageCount { get; set; }
+    public string? ContentHash { get; set; }
+
     public Guid Id { get; set; } = Guid.NewGuid();
 
     public Guid OwnerUserId { get; set; }

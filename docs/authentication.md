@@ -22,7 +22,7 @@ Wida uses Google OpenID Connect authorization-code flow with PKCE. The API valid
    dotnet user-secrets set "Authentication:AllowedEmails:0" "YOUR_INVITED_EMAIL"
    ```
 
-   Add invited addresses using indexes `1`, `2`, etc. The application does not send invitation emails. An empty allowlist denies all sign-ins. Removing an address invalidates that user's session on its next request; restart after changing User Secrets.
+   Add invited addresses using indexes `1`, `2`, etc. The application does not send invitation emails. When `Authentication:PublicBeta=false`, an empty allowlist denies all sign-ins and removing an address invalidates its session. Public beta mode (default) accepts all verified Google emails; restart after changing User Secrets.
 
 4. Apply the migrations and launch the API:
 
@@ -57,7 +57,7 @@ Use the same HTTPS frontend origin in API `Authentication:PublicOrigin` and fron
 
 Outside Development, startup requires an HTTPS public origin and persistent Data Protection key directory. Restrict its filesystem permissions and protect it with encrypted storage. Replicas must share compatible persistent keys. Uploads and PostgreSQL also require durable storage.
 
-The session lasts eight hours with sliding renewal. Cookies use HttpOnly and SameSite, plus Secure under HTTPS. Every authenticated request rechecks the user and invitation. Logout removes the browser's Wida session; it does not sign the person out of Google.
+The session lasts eight hours with sliding renewal. Cookies use HttpOnly and SameSite, plus Secure under HTTPS. Every authenticated request rechecks the user and, in invitation mode, the invitation. Logout removes the browser's Wida session; it does not sign the person out of Google.
 
 ## API contract
 
@@ -86,6 +86,8 @@ Live drafts are scoped to the user ID and browser-tab session. Expiry preserves 
 
 `dotnet test Wida.slnx` includes HTTP tests with a simulated OIDC provider, signed ID tokens, real cookie middleware and antiforgery. Coverage includes PKCE/state/nonce, verified-email/invitation checks, anonymous denial, logout, revoked invitations, foreign document access and user-bound CSRF. Domain tests cover child queries and write guards.
 
-These authentication HTTP tests use EF InMemory and simulated Google responses. The separate processing/concurrency suite uses SQLite transactions; see [test coverage](../Wida.Api/README.md#build-check). Real login requires Google credentials and an invited account. Verify the deployed callback and isolation with two real accounts before opening the pilot.
+These authentication HTTP tests use EF InMemory and simulated Google responses. The separate processing/concurrency suite uses SQLite transactions; see [test coverage](../Wida.Api/README.md#build-check). Real login requires Google credentials and a verified account (invited when public beta is disabled). Verify the deployed callback and isolation with two real accounts before opening the pilot.
 
 References: [Google OpenID Connect](https://developers.google.com/identity/openid-connect/openid-connect), [ASP.NET Core OIDC](https://learn.microsoft.com/en-us/aspnet/core/security/authentication/configure-oidc-web-authentication?view=aspnetcore-10.0).
+
+Public beta is enabled by default through `Authentication:PublicBeta=true`. See [trial quotas and deployment](public-beta.md).

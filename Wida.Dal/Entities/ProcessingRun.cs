@@ -4,6 +4,10 @@ namespace Wida.Dal.Entities;
 
 public class ProcessingRun
 {
+    public bool IsQuotaExempt { get; set; }
+    public int ReservedPages { get; set; }
+    public string? BudgetMonth { get; set; }
+
     public Guid Id { get; set; } = Guid.NewGuid();
 
     public Guid DocumentId { get; set; }

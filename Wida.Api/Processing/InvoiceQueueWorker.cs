@@ -95,7 +95,7 @@ public sealed class InvoiceQueueWorker(IServiceScopeFactory scopes, RabbitMqTran
             if (run.Status == ProcessingStatus.Failed) return false;
             if (run.NextAttemptAt > DateTime.UtcNow) continue;
             var analyzer = scope.ServiceProvider.GetRequiredService<IQueuedDocumentAnalyzer>();
-            await new InvoiceQueueExecutor(owned, analyzer).StepAsync(runId, token);
+            await new InvoiceQueueExecutor(owned, analyzer, scope.ServiceProvider.GetService<IConfiguration>()).StepAsync(runId, token);
         }
     }
 }

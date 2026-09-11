@@ -2,7 +2,7 @@ namespace Wida.Api.Files;
 
 public static class DocumentFilePolicy
 {
-    public const long MaximumBytes = 20 * 1024 * 1024;
+    public const long MaximumBytes = 4 * 1024 * 1024;
     public const long MaximumRequestBytes = MaximumBytes + 1024 * 1024;
 
     public static string? ContentTypeFor(string fileName) => Path.GetExtension(fileName).ToLowerInvariant() switch
