@@ -12,8 +12,8 @@ using Wida.Dal.Persistence;
 namespace Wida.Dal.Migrations
 {
     [DbContext(typeof(WidaDbContext))]
-    [Migration("20260908225314_AddGoogleUsersAndDocumentOwnership")]
-    partial class AddGoogleUsersAndDocumentOwnership
+    [Migration("20260911191656_InitialCreate")]
+    partial class InitialCreate
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -79,10 +79,11 @@ namespace Wida.Dal.Migrations
                         .HasMaxLength(255)
                         .HasColumnType("character varying(255)");
 
-                    b.Property<Guid?>("OwnerUserId")
+                    b.Property<Guid>("OwnerUserId")
                         .HasColumnType("uuid");
 
                     b.Property<int>("Status")
+                        .IsConcurrencyToken()
                         .HasColumnType("integer");
 
                     b.Property<string>("StoragePath")
@@ -162,6 +163,10 @@ namespace Wida.Dal.Migrations
                         .HasMaxLength(3)
                         .HasColumnType("character varying(3)");
 
+                    b.Property<decimal?>("DiscountAmount")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("numeric(18,4)");
+
                     b.Property<Guid>("DocumentId")
                         .HasColumnType("uuid");
 
@@ -178,6 +183,10 @@ namespace Wida.Dal.Migrations
                     b.Property<string>("PurchaseOrderNumber")
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
+
+                    b.Property<decimal?>("ShippingAmount")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("numeric(18,4)");
 
                     b.Property<decimal?>("SubtotalAmount")
                         .HasPrecision(18, 4)
@@ -269,6 +278,10 @@ namespace Wida.Dal.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<string>("AzureOperationId")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
                     b.Property<DateTime?>("CompletedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -283,6 +296,12 @@ namespace Wida.Dal.Migrations
                         .HasMaxLength(2000)
                         .HasColumnType("character varying(2000)");
 
+                    b.Property<bool>("IsBackgroundJob")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTime?>("NextAttemptAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<string>("Processor")
                         .IsRequired()
                         .HasMaxLength(100)
@@ -295,15 +314,27 @@ namespace Wida.Dal.Migrations
                     b.Property<string>("RawResult")
                         .HasColumnType("jsonb");
 
+                    b.Property<int>("RetryCount")
+                        .HasColumnType("integer");
+
                     b.Property<DateTime>("StartedAt")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<int>("Status")
                         .HasColumnType("integer");
 
+                    b.Property<DateTime?>("SubmissionStartedAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.HasKey("Id");
 
                     b.HasIndex("DocumentId");
+
+                    b.HasIndex("IsBackgroundJob", "Status", "StartedAt");
+
+                    b.HasIndex(new[] { "DocumentId" }, "IX_ProcessingRuns_ActiveJob")
+                        .IsUnique()
+                        .HasFilter("\"IsBackgroundJob\" = true AND \"Status\" IN (0, 1)");
 
                     b.ToTable("ProcessingRuns", (string)null);
                 });
@@ -313,7 +344,8 @@ namespace Wida.Dal.Migrations
                     b.HasOne("Wida.Dal.Entities.AppUser", "OwnerUser")
                         .WithMany()
                         .HasForeignKey("OwnerUserId")
-                        .OnDelete(DeleteBehavior.Restrict);
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
 
                     b.Navigation("OwnerUser");
                 });

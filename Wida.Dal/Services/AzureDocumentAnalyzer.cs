@@ -50,7 +50,11 @@ public class AzureDocumentAnalyzer : IDocumentAnalyzer
             BinaryData.FromBytes(fileBytes),
             cancellationToken);
 
-        var result = operation.Value;
+        return MapResult(operation.Value);
+    }
+
+    public static DocumentAnalysisResult MapResult(AnalyzeResult result)
+    {
 
         if (result.Documents.Count == 0)
         {

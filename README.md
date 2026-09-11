@@ -21,7 +21,7 @@ Wida is an ASP.NET Core API for uploading documents, recording invoices and line
 - Retrieve processing status, extracted fields, confidence scores, and failure information.
 - Inspect the API through OpenAPI and Scalar in Development with an authenticated session.
 
-Analysis runs during the HTTP request. It records extracted fields and updates unsaved documents through processing/review/failure states. Saving invoice data sets `Saved`; reanalysis preserves that state even when saving occurs while extraction is still running. Analysis extracts invoice headers and line items but does not create an invoice. Approval and export are not implemented. The API requires a Google-backed Wida session and restricts each user to their own documents. See [Google sign-in and pilot access](docs/authentication.md).
+Analysis is queued durably in RabbitMQ and processed by a .NET background worker. The endpoint returns 202 immediately; clients poll the run for completion. See [queue setup and recovery](docs/processing-queue.md). It records extracted fields and updates unsaved documents through processing/review/failure states. Saving invoice data sets `Saved`; reanalysis preserves that state even when saving occurs while extraction is still running. Analysis extracts invoice headers and line items but does not create an invoice. Approval and export are not implemented. The API requires a Google-backed Wida session and restricts each user to their own documents. See [Google sign-in and pilot access](docs/authentication.md).
 
 ## Getting started
 
@@ -46,4 +46,4 @@ On 10 September 2026, all **81 API tests** passed for commit `2e4011e`. Processi
 
 This project is licensed under the [MIT License](LICENSE).
 
-Invoice shipping and discount adjustments require migration `20260910120000_AddInvoiceAdjustments`. Apply migrations before starting the updated API; see the setup guide. Shipping is entered manually and discount can prefill from Azure `TotalDiscount`.
+Shipping is entered manually and discount can prefill from Azure `TotalDiscount`.

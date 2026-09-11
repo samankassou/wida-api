@@ -12,7 +12,7 @@ All document, invoice, processing and original-file endpoints require a Wida ses
 - JSON properties use camelCase. Enum responses use their named string values, such as `Uploaded` and `Completed`.
 - IDs are GUID strings. All ID route segments have a `:guid` constraint; malformed IDs do not match these routes.
 - Invoice dates use `YYYY-MM-DD`. Server timestamps are generated in UTC and serialized as ISO 8601 timestamps.
-- Successful creation returns `201 Created`, a response body, and a `Location` header pointing to the corresponding get-by-ID endpoint.
+- Successful resource creation returns `201 Created`; analysis admission returns `202 Accepted`. Both include a response body and a `Location` header.
 - Collection endpoints return JSON arrays, including `[]` when empty. They do not support pagination or filtering.
 - Authentication is required for data routes. Every record is scoped to its document owner; see [session setup](authentication.md).
 - In Development, interactive documentation is available at `/scalar/v1`, and OpenAPI JSON is available at `/openapi/v1.json`.
@@ -32,7 +32,7 @@ All document, invoice, processing and original-file endpoints require a Wida ses
 | `POST` | `/api/invoices` | Invoice JSON | `201`, invoice with lines |
 | `PUT` | `/api/invoices/{id}` | Same invoice JSON; unchanged document ID | `200`, updated invoice with replacement lines |
 | `POST` | `/api/processing/documents/{documentId}` | No body | `201`, manual processing run |
-| `POST` | `/api/processing/documents/{documentId}/invoice` | No body | `201`, analysis run, including runs whose status is `Failed` |
+| `POST` | `/api/processing/documents/{documentId}/invoice` | No body | `202`, queued/active analysis run; `429` if queue capacity is exhausted; `503` if RabbitMQ is unavailable |
 | `GET` | `/api/processing/{id}` | None | `200`, processing run |
 | `GET` | `/api/processing/documents/{documentId}` | None | `200`, array of runs, newest start first |
 
@@ -41,7 +41,7 @@ All document, invoice, processing and original-file endpoints require a Wida ses
 - `GET /api/documents/workspace?limit=100` returns an array of `{ "document": DocumentResponse, "invoice": InvoiceResponse|null, "latestRun": ProcessingRunResponse|null }`. The default limit is 100; supported limits are 1–500. Documents are ordered by upload time descending, with ID as a stable tie-breaker. The latest run is selected by start time, then ID descending. An empty workspace is `[]`.
 - The workspace loads invoices, their lines, and only the latest run with its extracted fields through a bounded EF split query. It does not query each document separately. Filtering/search/paging beyond the latest loaded documents is not implemented.
 - `GET /api/documents/{id}/content` streams original bytes with the canonical PDF/image content type, inline Content-Disposition, byte-range support, `X-Content-Type-Options: nosniff`, and `Cache-Control: private, no-store`. Add `?download=true` for attachment disposition. Filenames are header-encoded; storage paths are never returned. Browser support for TIFF previews varies; download is available.
-- Retrieval returns `404` for missing metadata/files, unsupported or invalid file signatures, symlink files, and paths outside the current upload directory. Historical files need a valid absolute path directly inside that directory.
+- Retrieval returns `404` for missing metadata/files, unsupported or invalid file signatures, symlink files, and paths outside the current upload directory.
 - `GET /api/invoices` returns all saved invoices with lines, newest creation first. `PUT /api/invoices/{id}` updates a saved invoice as described below.
 
 The individual document, invoice, and processing-run reads return `404` when no matching record exists. Both processing creation endpoints also return `404` for a missing document. Listing processing runs does not check whether the document exists: a missing document also returns `200` with `[]`. There are no delete, approval, or export endpoints.
@@ -197,17 +197,19 @@ curl --fail-with-body -X POST \
   "https://localhost:7127/api/processing/documents/$DOCUMENT_ID/invoice"
 ```
 
-This endpoint creates a separate `Running` record with processor `AzureDocumentIntelligence` and version `prebuilt-invoice`, reads the stored file, and waits for Azure analysis to complete within the HTTP request. It then saves and returns the run as `Completed` or `Failed`. Calling it again creates another run; it does not resume an earlier manual or failed run.
+This endpoint enqueues a durable `Pending` job and returns `202 Accepted` with its processing response and a status `Location`. A repeated request for the same document returns the existing active job. The background worker performs Azure analysis and transitions it to `Running`, then `Completed` or `Failed`. Poll `GET /api/processing/{id}` for results. Admission is limited to three active jobs per user and 100 globally; a full queue returns `429` with `Retry-After: 10`. New admission requires RabbitMQ publisher confirmation; broker unavailability returns `503` and rolls back the new run, preserving the upload. See [queue deployment and recovery](processing-queue.md).
 
-The analyzer reads only the first document returned by Azure. It extracts these fields when present: `InvoiceId`, `InvoiceDate`, `DueDate`, `VendorName`, `SubTotal`, `TotalTax`, `InvoiceTotal`, and `TotalDiscount`. It also extracts `Items` fields as `Items[0].Description`, `Items[0].Quantity`, etc., using zero-based Azure array indices. Supported line fields are `Description`, `Quantity`, `Unit`, `UnitPrice`, `TaxRate`, `Tax`, and `Amount`. Each field retains its typed normalized value, raw text, confidence, page, bounding polygon, and review flag in the existing `extractedFields` collection; no database migration is required. Empty or non-object rows and absent fields are skipped; no missing values are invented. No analyzed documents results in a `Failed` run. An analyzed document without any of the selected fields can complete with an empty `extractedFields` array.
+The analyzer reads only the first document returned by Azure. It extracts these fields when present: `InvoiceId`, `InvoiceDate`, `DueDate`, `VendorName`, `SubTotal`, `TotalTax`, `InvoiceTotal`, and `TotalDiscount`. It also extracts `Items` fields as `Items[0].Description`, `Items[0].Quantity`, etc., using zero-based Azure array indices. Supported line fields are `Description`, `Quantity`, `Unit`, `UnitPrice`, `TaxRate`, `Tax`, and `Amount`. Each field retains its typed normalized value, raw text, confidence, page, bounding polygon, and review flag in the `extractedFields` collection. Empty or non-object rows and absent fields are skipped; no missing values are invented. No analyzed documents results in a `Failed` run. An analyzed document without any of the selected fields can complete with an empty `extractedFields` array.
 
 Raw analysis and extracted fields are stored in the database. An extracted field has `requiresReview: true` when confidence is missing or below `0.80`; confidence equal to `0.80` does not require review. This flag does not decide whether data is valid. Every completed analysis of an unsaved document moves it to `ReviewRequired`, including empty extraction or high-confidence results. When available, the first bounding region supplies the field's page number and polygon.
 
 Analysis does not create an invoice. To store an invoice, submit its values separately to `POST /api/invoices`.
 
-Request cancellation after a run starts is handled separately from other analysis failures: the service attempts to save `Failed` with `DOCUMENT_ANALYSIS_CANCELLED`, then propagates cancellation. Terminal persistence uses a separate 10-second token independent of the request token, for both successful and failed analysis. A disconnected client may receive no response; retrieve the run or list the document's runs to inspect persisted status. Database failure, expiration of the persistence timeout, or process termination can still leave a run `Running`.
+Once admission is committed, disconnecting the browser does not cancel analysis. A restarted worker resumes polling a persisted Azure operation ID. If submission may have succeeded but its ID was not saved, the run fails with `ANALYSIS_SUBMISSION_UNCERTAIN` instead of automatically resubmitting. An explicit new analysis after a terminal run can consume additional pages.
 
 ### Processing response
+
+New submissions return `Pending` with no fields and no completion time; the example below is a later completed status response.
 
 ```json
 {
@@ -245,7 +247,7 @@ Request cancellation after a run starts is handled separately from other analysi
 | `processorVersion` | string or null | `v1` for manual runs; `prebuilt-invoice` for analysis |
 | `startedAt` | timestamp | Run-record creation time, including for a pending manual run |
 | `completedAt` | timestamp or null | Set when analysis completes or a caught analysis error occurs |
-| `errorCode` | string or null | `DOCUMENT_ANALYSIS_FAILED` on a caught analysis error; `DOCUMENT_ANALYSIS_CANCELLED` when request cancellation interrupts analysis |
+| `errorCode` | string or null | `DOCUMENT_ANALYSIS_FAILED`, `ANALYSIS_SUBMISSION_UNCERTAIN`, `ANALYSIS_EXPIRED`, or `ANALYSIS_RETRY_EXHAUSTED`; see queue recovery guide |
 | `errorMessage` | string or null | Error message limited to 2,000 characters |
 | `extractedFields` | array | Persisted fields; `[]` for a manual run or an analysis with no extracted fields |
 
@@ -273,7 +275,7 @@ Normalized values and bounding data are JSON values, not strings containing JSON
 | Document `status` | `Uploaded`, `Queued`, `Processing`, `ReviewRequired`, `Approved`, `Rejected`, `Failed`, `Saved` |
 | Processing run `status` | `Pending`, `Running`, `Completed`, `Failed` |
 
-Upload creates `Unknown` / `Uploaded`; analysis sets `Invoice` and moves unsaved documents through `Processing` to `ReviewRequired` or `Failed`; invoice creation/update sets `Invoice` / `Saved`. Existing `Saved` status survives reanalysis, and saving during analysis likewise preserves `Saved`. `Queued`, `Approved`, and `Rejected` are reserved and have no implemented action. `Saved` is the integer enum value 7 and requires no schema migration; historical status values are not backfilled. Extracted field `source` uses the `ExtractionSource` enum with `Ocr`, `DocumentIntelligence`, `Llm`, `Rule`, and `Human`; the Azure analyzer returns `DocumentIntelligence`.
+Upload creates `Unknown` / `Uploaded`; analysis sets `Invoice` and moves unsaved documents through `Processing` to `ReviewRequired` or `Failed`; invoice creation/update sets `Invoice` / `Saved`. Existing `Saved` status survives reanalysis, and saving during analysis likewise preserves `Saved`. `Queued` marks admitted analysis jobs; `Approved` and `Rejected` remain reserved. Extracted field `source` uses the `ExtractionSource` enum with `Ocr`, `DocumentIntelligence`, `Llm`, `Rule`, and `Human`; the Azure analyzer returns `DocumentIntelligence`.
 
 ## Error behavior
 
@@ -292,8 +294,8 @@ Upload creates `Unknown` / `Uploaded`; analysis sets `Invoice` and moves unsaved
 | Missing document during invoice creation or missing invoice during update | `404` ProblemDetails |
 | Missing document during manual run creation or invoice analysis | Explicit `404` |
 | A document already has an invoice, or PUT attempts reassociation | `409` ProblemDetails |
-| Analysis failure, including missing Azure configuration, unreadable stored file, or no analyzed documents | Run is marked `Failed` with `DOCUMENT_ANALYSIS_FAILED`; endpoint still returns `201` if saving the failure succeeds |
-| Request cancellation during analysis | Attempt to persist `Failed` with `DOCUMENT_ANALYSIS_CANCELLED` using a separate 10-second token, then propagate cancellation |
+| Background analysis failure | Status polling returns a `Failed` run with an error code and message. Submission itself returns `202`. |
+| Client disconnects after admission | The durable job continues independently of the browser. |
 | Startup configuration, file-upload, or persistence failure outside the analysis handler | Unhandled exception |
 
 Invoice create/update errors are mapped by the invoice controller to `application/problem+json`. Validation keys use camelCase paths such as `supplierName`, `dueDate`, `totalAmount`, and `lines[0].lineAmount`:
@@ -313,14 +315,13 @@ Document status uses optimistic concurrency. The async persistence path reconcil
 
 The existing document uniqueness constraint also maps concurrent duplicate creation to `409`. Unexpected persistence and infrastructure failures still become HTTP `500`; the response body depends on the environment and host. There is no global exception middleware.
 
-Always inspect the analysis run's `status`; `curl --fail-with-body` alone cannot detect a failed analysis returned with `201`. Request cancellation can prevent a response from reaching the client even after the terminal state is saved. A failed final database save prevents the updated state from being persisted.
+Poll the analysis run until `Completed` or `Failed`; HTTP `202` only confirms admission. Database interruptions leave a job for recovery by the worker. A known Azure operation is polled again; an uncertain submission is never automatically sent again.
 
 ## Current limitations
 
-- Historical document records with relative or duplicated storage paths are not repaired automatically. Re-upload those documents or explicitly repair their metadata to point to existing files.
 - File writes and database writes are not atomic: a process interruption or failed cleanup can leave an orphan upload.
 - Eight selected header fields and supported line-item fields from the first analyzed document are extracted; additional analyzed documents are not processed.
-- There is no background worker, run-resume endpoint, extraction-review workflow, automatic invoice creation, or approval/rejection action in the current API.
+- Background jobs recover automatically as described in the queue guide. There is no public run-resume endpoint, extraction-review workflow, automatic invoice creation, or approval/rejection action.
 
 ## Source map
 
@@ -334,7 +335,7 @@ Always inspect the analysis run's `status`; `curl --fail-with-body` alone cannot
 
 ### Shipping and discount adjustments
 
-Invoice requests and responses include nullable decimal `shippingAmount` and `discountAmount` (precision 18, scale 4). Both are persisted on create/update and cleared by omission on a full update. Apply migration `20260910120000_AddInvoiceAdjustments` before running the updated API. Existing records retain null adjustments.
+Invoice requests and responses include nullable decimal `shippingAmount` and `discountAmount` (precision 18, scale 4). Both are persisted on create/update and cleared by omission on a full update.
 
 The analyzer extracts `TotalDiscount` when returned by Azure. Shipping is entered manually: the [Azure invoice schema](https://github.com/Azure-Samples/document-intelligence-code-samples/blob/main/schema/2024-11-30-ga/invoice.md) has no dedicated shipping-charge field. Shipping is never inferred from a difference between totals.
 

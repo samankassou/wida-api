@@ -6,10 +6,9 @@ public class Document
 {
     public Guid Id { get; set; } = Guid.NewGuid();
 
-    // Existing documents remain unassigned until explicitly migrated by an administrator.
-    public Guid? OwnerUserId { get; set; }
+    public Guid OwnerUserId { get; set; }
 
-    public AppUser? OwnerUser { get; set; }
+    public AppUser OwnerUser { get; set; } = null!;
 
     public string OriginalFileName { get; set; } = string.Empty;
 

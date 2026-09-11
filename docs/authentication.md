@@ -74,13 +74,13 @@ All document, original-file, invoice and processing routes require a Wida sessio
 
 The proxy forwards only `Wida.*` cookies and preserves separate Set-Cookie headers. It returns allowed Google navigation redirects without following them, rejecting other redirects. Session and data responses are uncached.
 
-## Ownership and legacy data
+## Document ownership
 
 New uploads receive the authenticated Wida user ID on the server. Query filters cover documents, invoices, invoice lines, processing runs and extracted fields. Write guards reject foreign owners, foreign parent references and ownership reassignment. Other users' IDs reveal no record, including downloads and analysis requests.
 
-The migration is additive: existing documents retain `OwnerUserId = NULL` and originals stay on disk. They are inaccessible to signed-in users and never automatically assigned to the first account. A trusted operator must identify the intended owner and specific legacy documents before explicit database assignment. There is no ownership-transfer endpoint.
+Every document requires an `OwnerUserId` foreign key. There is no ownership-transfer endpoint.
 
-Live drafts are scoped to the user ID and browser-tab session. Expiry preserves them for the same user. Explicit logout warns about unsaved drafts and clears them in the current tab. Other tabs hide their workspace while retaining owner-scoped recovery data. Edited values survive extraction retries, but checks are tied to a specific run and reset when it changes. Drafts without a stored run ID retain their values but require review again.
+Live drafts are scoped to the user ID and browser-tab session. Expiry preserves them for the same user. Explicit logout warns about unsaved drafts and clears them in the current tab. Other tabs hide their workspace while retaining owner-scoped recovery data. Edited values survive extraction retries, but checks are tied to a specific run and reset when it changes. Stored drafts must match the current format, including an explicit extraction run ID or null before a completed extraction.
 
 ## Verification
 

@@ -39,6 +39,10 @@ public class ProcessingRunConfiguration
             .HasForeignKey(x => x.ProcessingRunId)
             .OnDelete(DeleteBehavior.Cascade);
 
+        builder.Property(x => x.AzureOperationId).HasMaxLength(100);
+        builder.HasIndex(x => new { x.IsBackgroundJob, x.Status, x.StartedAt });
         builder.HasIndex(x => x.DocumentId);
+        builder.HasIndex(x => x.DocumentId, "IX_ProcessingRuns_ActiveJob")
+            .IsUnique().HasFilter("\"IsBackgroundJob\" = true AND \"Status\" IN (0, 1)");
     }
 }

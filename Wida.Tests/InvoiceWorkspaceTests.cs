@@ -41,13 +41,14 @@ public class InvoiceWorkspaceTests
     }
 
     [Fact]
-    public void Adjustment_migration_matches_the_PostgreSql_model()
+    public void Initial_migration_matches_the_PostgreSql_model_and_requires_document_ownership()
     {
         using var context = new WidaDbContext(new DbContextOptionsBuilder<WidaDbContext>()
             .UseNpgsql("Host=localhost;Database=migration_check;Username=test;Password=test")
             .Options, TestCurrentUser.Default);
         Assert.False(context.Database.HasPendingModelChanges());
-        Assert.Contains("20260910120000_AddInvoiceAdjustments", context.Database.GetMigrations());
+        Assert.EndsWith("_InitialCreate", Assert.Single(context.Database.GetMigrations()));
+        Assert.False(context.Model.FindEntityType(typeof(Document))!.FindProperty(nameof(Document.OwnerUserId))!.IsNullable);
     }
 
     [Fact]

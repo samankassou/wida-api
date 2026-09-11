@@ -75,7 +75,7 @@ public class WidaDbContext(DbContextOptions<WidaDbContext> options, ICurrentUser
                     throw;
                 var persisted = await entry.GetDatabaseValuesAsync(cancellationToken);
                 if (persisted is null
-                    || persisted.GetValue<Guid?>(nameof(Document.OwnerUserId)) != CurrentUserId)
+                    || persisted.GetValue<Guid>(nameof(Document.OwnerUserId)) != CurrentUserId)
                     throw;
                 var status = persisted.GetValue<DocumentStatus>(nameof(Document.Status));
                 if (status == entry.OriginalValues.GetValue<DocumentStatus>(nameof(Document.Status))
@@ -107,7 +107,7 @@ public class WidaDbContext(DbContextOptions<WidaDbContext> options, ICurrentUser
         {
             if (entry.State == EntityState.Added)
             {
-                if (entry.Entity.OwnerUserId is { } requestedOwner && requestedOwner != userId)
+                if (entry.Entity.OwnerUserId != Guid.Empty && entry.Entity.OwnerUserId != userId)
                     throw new UnauthorizedAccessException("Document ownership cannot be assigned to another user.");
                 entry.Entity.OwnerUserId = userId;
             }

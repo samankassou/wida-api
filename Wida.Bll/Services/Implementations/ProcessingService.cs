@@ -126,35 +126,8 @@ public class ProcessingService : IProcessingService
                     document.StoragePath,
                     cancellationToken);
 
-            if (result.Fields.Any(field => field.RawValue?.Length > 4000))
-            {
-                throw new InvalidOperationException(
-                    "An extracted field exceeds the supported raw text length of 4000 characters.");
-            }
-
-            var extractedFields = result.Fields
-                .Select(field => new ExtractedField
-                {
-                    ProcessingRunId = processingRun.Id,
-                    FieldName = field.Name,
-                    RawValue = field.RawValue,
-                    NormalizedValue = field.NormalizedValue?.GetRawText(),
-                    Confidence = field.Confidence,
-                    Source = ExtractionSource.DocumentIntelligence,
-                    PageNumber = field.PageNumber,
-                    BoundingBox = field.BoundingBox?.GetRawText(),
-                    RequiresReview =
-                        field.Confidence is null ||
-                        field.Confidence < 0.80m
-                })
-                .ToList();
-
             cancellationToken.ThrowIfCancellationRequested();
-            _processingRunRepository.AddExtractedFields(extractedFields);
-            processingRun.ExtractedFields = extractedFields;
-            processingRun.RawResult = result.RawResult;
-            processingRun.Status = ProcessingStatus.Completed;
-            processingRun.CompletedAt = DateTime.UtcNow;
+            ApplyResult(processingRun, result, _processingRunRepository.AddExtractedFields);
             if (!preserveSaved) document.Status = DocumentStatus.ReviewRequired;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -175,6 +148,39 @@ public class ProcessingService : IProcessingService
         await SaveTerminalStateAsync();
 
         return Map(processingRun);
+    }
+
+    internal static void ApplyResult(ProcessingRun processingRun, Wida.Dal.Models.DocumentAnalysisResult result,
+        Action<IEnumerable<ExtractedField>> addFields)
+    {
+        if (result.Fields.Any(field => field.RawValue?.Length > 4000))
+        {
+            throw new InvalidOperationException(
+                "An extracted field exceeds the supported raw text length of 4000 characters.");
+        }
+
+        var extractedFields = result.Fields
+            .Select(field => new ExtractedField
+            {
+                ProcessingRunId = processingRun.Id,
+                FieldName = field.Name,
+                RawValue = field.RawValue,
+                NormalizedValue = field.NormalizedValue?.GetRawText(),
+                Confidence = field.Confidence,
+                Source = ExtractionSource.DocumentIntelligence,
+                PageNumber = field.PageNumber,
+                BoundingBox = field.BoundingBox?.GetRawText(),
+                RequiresReview =
+                    field.Confidence is null ||
+                    field.Confidence < 0.80m
+            })
+            .ToList();
+
+        addFields(extractedFields);
+        processingRun.ExtractedFields = extractedFields;
+        processingRun.RawResult = result.RawResult;
+        processingRun.Status = ProcessingStatus.Completed;
+        processingRun.CompletedAt = DateTime.UtcNow;
     }
 
     private async Task SaveTerminalStateAsync()

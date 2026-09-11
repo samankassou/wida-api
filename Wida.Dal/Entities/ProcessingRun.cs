@@ -16,6 +16,16 @@ public class ProcessingRun
 
     public string? ProcessorVersion { get; set; }
 
+    public bool IsBackgroundJob { get; set; }
+
+    public string? AzureOperationId { get; set; }
+
+    public DateTime? SubmissionStartedAt { get; set; }
+
+    public DateTime? NextAttemptAt { get; set; }
+
+    public int RetryCount { get; set; }
+
     public string? RawResult { get; set; }
 
     public DateTime StartedAt { get; set; } = DateTime.UtcNow;

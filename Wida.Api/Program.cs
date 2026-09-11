@@ -7,6 +7,17 @@ using Wida.Api.Authentication;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Explicit operator recovery after restoring broker data.
+// Re-publish a known ID only; this never scans PostgreSQL or creates a second run.
+if (builder.Configuration["republish-analysis-run"] is { } replayId)
+{
+    if (!Guid.TryParse(replayId, out var runId))
+        throw new ArgumentException("--republish-analysis-run requires a processing run GUID.");
+    await new Wida.Api.Processing.RabbitMqTransport(builder.Configuration).PublishAsync(runId);
+    Console.WriteLine($"RabbitMQ confirmed analysis run {runId}.");
+    return;
+}
+
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
 if (string.IsNullOrWhiteSpace(connectionString))
 {
@@ -29,6 +40,15 @@ builder.Services
 
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
+
+builder.Services.AddHttpClient<Wida.Dal.Services.Interfaces.IQueuedDocumentAnalyzer, Wida.Dal.Services.QueuedAzureDocumentAnalyzer>(client =>
+    client.Timeout = TimeSpan.FromSeconds(60))
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+builder.Services.AddSingleton<Wida.Api.Processing.RabbitMqTransport>();
+builder.Services.AddSingleton<Wida.Bll.Services.Interfaces.IAnalysisJobPublisher>(services =>
+    services.GetRequiredService<Wida.Api.Processing.RabbitMqTransport>());
+if (builder.Configuration.GetValue("ProcessingQueue:Enabled", true))
+    builder.Services.AddHostedService<Wida.Api.Processing.InvoiceQueueWorker>();
 
 var app = builder.Build();
 

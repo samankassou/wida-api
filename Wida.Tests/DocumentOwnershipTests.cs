@@ -186,17 +186,9 @@ public class DocumentOwnershipTests
     }
 
     [Fact]
-    public async Task Anonymous_context_cannot_read_or_create_documents_and_legacy_data_stays_unclaimed()
+    public async Task Anonymous_context_cannot_read_or_create_documents()
     {
         var fixture = await Fixture.CreateAsync();
-        var legacy = new Document { OriginalFileName = "legacy.pdf", StoragePath = "/private/legacy.pdf" };
-        // Model the rows that existed before ownership was introduced, without a production bypass.
-        await using (var seed = fixture.OpenLegacySeeder())
-        {
-            seed.Set<Document>().Add(legacy);
-            await seed.SaveChangesAsync();
-        }
-
         await using var anonymous = fixture.Open(null);
         Assert.Empty(await anonymous.Documents.ToListAsync());
         Assert.Empty(await anonymous.Invoices.ToListAsync());
@@ -207,15 +199,7 @@ public class DocumentOwnershipTests
         await Assert.ThrowsAsync<UnauthorizedAccessException>(
             () => upload.CreateAsync("anonymous.pdf", "application/pdf", "/private/anonymous.pdf"));
 
-        foreach (var userId in new[] { fixture.AliceDocument.OwnerUserId, fixture.BobDocument.OwnerUserId })
-        {
-            await using var user = fixture.Open(userId);
-            Assert.Null(await user.Documents.SingleOrDefaultAsync(document => document.Id == legacy.Id));
-            Assert.Null(await new DocumentService(new DocumentRepository(user)).GetContentAsync(legacy.Id));
-        }
 
-        await using var inspect = fixture.OpenLegacySeeder();
-        Assert.Null((await inspect.Set<Document>().SingleAsync(document => document.Id == legacy.Id)).OwnerUserId);
     }
 
     private sealed class NeverCalledAnalyzer : IDocumentAnalyzer
@@ -229,12 +213,6 @@ public class DocumentOwnershipTests
         }
     }
 
-    private sealed class LegacyDataContext(DbContextOptions options) : DbContext(options)
-    {
-        protected override void OnModelCreating(ModelBuilder modelBuilder) =>
-            modelBuilder.ApplyConfigurationsFromAssembly(typeof(WidaDbContext).Assembly);
-    }
-
     private sealed class Fixture
     {
         private readonly string _databaseName = Guid.NewGuid().ToString();
@@ -245,9 +223,6 @@ public class DocumentOwnershipTests
 
         public WidaDbContext Open(Guid? userId) => new(new DbContextOptionsBuilder<WidaDbContext>()
             .UseInMemoryDatabase(_databaseName, _databaseRoot).Options, new TestCurrentUser(userId));
-
-        public DbContext OpenLegacySeeder() => new LegacyDataContext(new DbContextOptionsBuilder()
-            .UseInMemoryDatabase(_databaseName, _databaseRoot).Options);
 
         public static async Task<Fixture> CreateAsync()
         {

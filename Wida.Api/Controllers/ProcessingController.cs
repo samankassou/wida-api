@@ -9,11 +9,13 @@ namespace Wida.Api.Controllers;
 public class ProcessingController : ControllerBase
 {
     private readonly IProcessingService _processingService;
+    private readonly IInvoiceQueue _queue;
 
     public ProcessingController(
-        IProcessingService processingService)
+        IProcessingService processingService, IInvoiceQueue queue)
     {
         _processingService = processingService;
+        _queue = queue;
     }
 
     [HttpPost("documents/{documentId:guid}")]
@@ -73,11 +75,21 @@ public class ProcessingController : ControllerBase
     {
         try
         {
-            var run = await _processingService.ProcessInvoiceAsync(
+            var run = await _queue.EnqueueAsync(
                 documentId,
                 cancellationToken);
 
-            return CreatedAtAction(nameof(GetById), new { id = run.Id }, run);
+            return AcceptedAtAction(nameof(GetById), new { id = run.Id }, run);
+        }
+        catch (QueueUnavailableException ex)
+        {
+            Response.Headers.RetryAfter = "10";
+            return Problem(statusCode: StatusCodes.Status503ServiceUnavailable, detail: ex.Message);
+        }
+        catch (QueueCapacityException ex)
+        {
+            Response.Headers.RetryAfter = "10";
+            return Problem(statusCode: StatusCodes.Status429TooManyRequests, detail: ex.Message);
         }
         catch (DocumentNotFoundException ex)
         {

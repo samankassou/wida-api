@@ -175,6 +175,7 @@ public sealed class AuthHttpTests
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             builder.UseEnvironment("Development");
+            builder.UseSetting("ProcessingQueue:Enabled", "false");
             builder.UseContentRoot(_contentRoot);
             builder.UseSetting("ConnectionStrings:DefaultConnection", "Host=unused;Database=unused");
             builder.UseSetting("Authentication:PublicOrigin", "http://localhost:3000");

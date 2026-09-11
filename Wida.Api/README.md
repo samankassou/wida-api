@@ -13,7 +13,7 @@
 
 ## Authentication
 
-All data endpoints now require a Google-backed Wida session. Configure the OAuth client, invited addresses and frontend callback using [Google sign-in and pilot access](../docs/authentication.md). New uploads are owned by the signed-in user. The ownership migration preserves existing documents without assigning them to an account.
+All data endpoints now require a Google-backed Wida session. Configure the OAuth client, invited addresses and frontend callback using [Google sign-in and pilot access](../docs/authentication.md). Every document requires the signed-in user as its owner.
 
 ## Local setup
 
@@ -101,7 +101,7 @@ JSON uses camelCase property names and string enum values such as `Uploaded`, `P
 | GET | `/api/invoices/{id}` | Get an invoice and its lines; `404` if absent. |
 | GET | `/api/invoices/document/{documentId}` | Get the invoice for a document; `404` if absent. |
 | POST | `/api/processing/documents/{documentId}` | Create a `Pending` run with processor `Manual`, version `v1`; returns `201`, or `404` if the document is absent. This does not start analysis. |
-| POST | `/api/processing/documents/{documentId}/invoice` | Run Azure invoice analysis during the request and return the run with `201`, or `404` if the document is absent. |
+| POST | `/api/processing/documents/{documentId}/invoice` | Enqueue Azure invoice analysis and return `202`; `404` if absent, `429` if queue capacity is exhausted, or `503` if RabbitMQ is unavailable. |
 | GET | `/api/processing/{id}` | Get a processing run and extracted fields; `404` if absent. |
 | GET | `/api/processing/documents/{documentId}` | List processing runs for a document; returns an empty list if none exist. |
 
@@ -126,11 +126,11 @@ curl --fail-with-body \
   "https://localhost:7127/api/processing/documents/$DOCUMENT_ID"
 ```
 
-Analysis waits for Azure to finish; there is no background worker. A run is saved as `Running`, then updated to `Completed` or `Failed`. Caught analysis errors set `errorCode` to `DOCUMENT_ANALYSIS_FAILED` and include an error message capped at 2,000 characters. A failed analysis can still return HTTP `201`, so inspect the response `status`.
+Analysis admission returns `202` immediately. The RabbitMQ consumer changes the run from `Pending` to `Running`, then `Completed` or `Failed`. Poll the returned run to obtain extraction fields; errors are reported on that run. Repeated requests reuse the active job.
 
 The analyzer reads the first analyzed document and stores these fields when present: `InvoiceId`, `InvoiceDate`, `DueDate`, `VendorName`, `SubTotal`, `TotalTax`, and `InvoiceTotal`. An Azure response with no analyzed documents fails the run. Fields with missing confidence or confidence below `0.80` have `requiresReview: true`. Processing responses include extracted fields with typed normalized JSON values and the first bounding region's page number and polygon, when available. Raw analysis is persisted internally. Line items are not extracted.
 
-If the request is canceled after analysis starts, the service attempts to save `Failed` with `DOCUMENT_ANALYSIS_CANCELLED` before propagating cancellation. All terminal saves use a separate 10-second token independent of request cancellation. A database outage, expired persistence timeout, or terminated process can still leave a run `Running`; there is no automatic recovery job.
+After admission commits, browser cancellation does not stop processing. The worker persists the Azure operation ID and resumes polling after restart. An interrupted submission without a persisted operation ID is marked uncertain and is not automatically resent. See [queue recovery](../docs/processing-queue.md).
 
 Analysis sets type `Invoice` and moves an unsaved document through `Processing` to `ReviewRequired` or `Failed`. It does not create an invoice. Create the invoice separately using the document ID; saving sets document status `Saved`:
 
@@ -174,14 +174,11 @@ Migrations live in `Wida.Dal/Migrations`:
 
 | Migration | Tables added |
 | --- | --- |
-| `InitialCreate` | `Documents` |
-| `AddInvoiceEntities` | `Invoices`, `InvoiceLines` |
-| `AddProcessingEntities` | `ProcessingRuns`, `ExtractedFields` |
-| `AddGoogleUsersAndDocumentOwnership` | `Users`, nullable document ownership and indexes |
+| `InitialCreate` | `Users`, `Documents`, `Invoices`, `InvoiceLines`, `ProcessingRuns`, `ExtractedFields`, including required ownership, invoice adjustments and analysis tracking |
 
 A document has at most one invoice and can have multiple processing runs. Invoice lines belong to an invoice; extracted fields belong to a processing run. These child relationships use cascade deletion. Raw analysis, normalized extracted values, and bounding boxes use PostgreSQL `jsonb` columns.
 
-The document-status concurrency check uses the existing `Status` column; it does not add a migration or require a schema update. The committed model snapshot includes that concurrency metadata.
+The document-status concurrency check uses the `Status` column.
 
 Schema changes are applied explicitly, not on application startup. After changing EF models/configurations, run from `Wida.Api`:
 
@@ -192,8 +189,8 @@ ASPNETCORE_ENVIRONMENT=Development dotnet ef database update --project ../Wida.D
 
 ## Current limitations
 
-- Processing extracts eight header fields and supported line items from the first analyzed document. It does not process additional analyzed documents in the same file. Shipping is entered manually; discounts can be extracted. Apply migration `20260910120000_AddInvoiceAdjustments` for the persisted shipping and discount amounts.
-- Processing has no background execution, run-resume endpoint, extracted-field review endpoint, or automatic invoice creation. A repeated analysis request creates a new run. Approval/rejection and export are not implemented. The workspace endpoint returns the latest 100 documents by default (up to 500); it does not provide server search or pagination.
+- Processing extracts eight header fields and supported line items from the first analyzed document. It does not process additional analyzed documents in the same file. Shipping is entered manually; discounts can be extracted.
+- Processing uses a durable RabbitMQ queue and background worker; repeated requests reuse the active job. See [queue setup](../docs/processing-queue.md). There is no extracted-field review endpoint or automatic invoice creation. Approval/rejection and export are not implemented. The workspace endpoint returns the latest 100 documents by default (up to 500); it does not provide server search or pagination.
 - Existing records with relative or duplicated storage paths are not repaired automatically. Re-upload the documents or explicitly repair their metadata to point to existing files.
 - Filesystem and database writes are not transactional; process termination or unsuccessful cleanup can leave orphan uploads. A failed terminal database save can leave a processing run `Running`.
 - Browser traffic uses the same-origin Next.js proxy. Authentication, ownership checks and CSRF protection apply to every data request; no cross-origin browser API policy is enabled.
@@ -209,8 +206,8 @@ ASPNETCORE_ENVIRONMENT=Development dotnet ef database update --project ../Wida.D
 | Frontend mutation returns `403` | Check the request Origin against frontend `WIDA_PUBLIC_ORIGIN`; this is a proxy check. |
 | Tables do not exist | Apply the committed migrations against the configured database; startup does not apply them. |
 | Analysis reports a missing Azure endpoint or key | Set both analyzer settings; reading runs and creating manual runs do not require them. |
-| Analysis cannot read the file | Check file existence and read access at its stored path. Re-upload or repair metadata for historical records with relative or duplicated paths. |
-| Analysis returns `201` but the run is `Failed` | Inspect `errorCode` and `errorMessage`; `201` confirms that a run was created, including a failed analysis. |
+| Analysis cannot read the file | Check file existence and read access at its stored path. |
+| Analysis returns `202` | Poll the returned run until `Completed` or `Failed`; inspect `errorCode` and `errorMessage` on failure. |
 | A run remains `Running` after interruption | Check API and database availability. There is no reconciliation job; retrying analysis creates a new run. |
 | Scalar or OpenAPI returns `404` | Use the Development environment, as set by the supplied launch profiles. |
 | HTTPS certificate is not trusted locally | Run `dotnet dev-certs https --trust` and use the supplied HTTPS launch profile. |
@@ -237,8 +234,14 @@ Tests do not require Google/Azure credentials or a running PostgreSQL server. SQ
 
 Use the example workflow or [HTTP request file](wida-api.http) to verify upload, processing status, extracted fields, and invoice creation against your configured database and Azure resource. Run the requests individually and replace their placeholder IDs with IDs returned by the API. Invoice analysis sends the uploaded document to the configured Azure resource.
 
-A manual check should cover upload, original-file preview/range retrieval, workspace summaries, invoice creation/update/listing and retrieval by both invoice/document ID, a manual `Pending` run, and an Azure analysis response whose `status` and `extractedFields` are inspected even when HTTP is `201`. Retrieve the analysis run again to confirm its extracted values were persisted. Also save an invoice from a second request while analysis is in progress, then confirm the document remains `Saved` and the run independently reports `Completed` or `Failed`.
+A manual check should cover upload, original-file preview/range retrieval, workspace summaries, invoice creation/update/listing and retrieval by both invoice/document ID, a manual `Pending` run, and an Azure submission returning `202`, followed by polling until terminal status and inspecting `extractedFields`. Retrieve the analysis run again to confirm its extracted values were persisted. Also save an invoice from a second request while analysis is in progress, then confirm the document remains `Saved` and the run independently reports `Completed` or `Failed`.
 
 ## Licence
 
 Wida API is licensed under the [MIT License](../LICENSE).
+
+## Database initialization and queue setup
+
+Initialize an empty database using the committed `InitialCreate` migration. The worker starts with the API by default and needs an always-running host, private RabbitMQ connectivity, and shared durable originals across replicas. See [processing queue](../docs/processing-queue.md) for setup, pausing workers and PostgreSQL integration tests. Trial page credits and F0-specific upload/page validation remain separate public-launch work.
+
+Configure `RabbitMQ__Uri` (for example, a private AMQP URI supplied through secrets). For a native RabbitMQ service on the VPS or another server, see [RabbitMQ setup](../docs/processing-queue.md) and the [configuration example](../deploy/rabbitmq.conf). PostgreSQL stores analysis state; RabbitMQ distributes messages.
