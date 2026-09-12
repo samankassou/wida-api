@@ -25,6 +25,9 @@ namespace Wida.Tests;
 public sealed class AuthHttpTests
 {
     [Theory]
+    [InlineData("GET", "/api/admin/users")]
+    [InlineData("GET", "/api/admin/metrics")]
+    [InlineData("PUT", "/api/admin/users/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/trial")]
     [InlineData("GET", "/api/documents")]
     [InlineData("GET", "/api/documents/workspace")]
     [InlineData("GET", "/api/documents/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/content")]
@@ -60,6 +63,65 @@ public sealed class AuthHttpTests
             await db.SaveChangesAsync();
         }
         Assert.Equal("User", (await browser.SessionAsync()).GetProperty("user").GetProperty("role").GetString());
+    }
+
+    [Fact]
+    public async Task Admin_can_manage_trial_allowances_but_regular_users_and_demoted_admins_cannot()
+    {
+        await using var factory = new AuthFactory();
+        var configuration = factory.Services.GetRequiredService<IConfiguration>();
+        configuration["Authentication:AdminEmail"] = "admin@example.com";
+        configuration["Authentication:PublicBeta"] = "true";
+        using var admin = new TestBrowser(factory);
+        using var regular = new TestBrowser(factory);
+        await admin.GoogleLoginAsync("admin@example.com", "google-admin");
+        await regular.GoogleLoginAsync("regular@example.com", "google-regular");
+        var csrf = (await admin.SessionAsync()).GetProperty("csrfToken").GetString();
+        var regularCsrf = (await regular.SessionAsync()).GetProperty("csrfToken").GetString();
+        Guid userId;
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<WidaDbContext>();
+            var user = await db.Users.SingleAsync(x => x.Email == "regular@example.com");
+            user.AnalysisPagesUsed = 3;
+            user.CreditRequestedAt = DateTime.UtcNow;
+            userId = user.Id;
+            await db.SaveChangesAsync();
+        }
+        var path = $"/api/admin/users/{userId}/trial";
+        Assert.Equal(HttpStatusCode.Forbidden, (await regular.SendAsync("GET", "/api/admin/users")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await regular.SendAsync("GET", "/api/admin/metrics")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await regular.SendAsync("PUT", path, JsonContent.Create(new { pagesGranted = 100 }), regularCsrf)).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await admin.SendAsync("PUT", path, JsonContent.Create(new { pagesGranted = 100 }))).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await admin.SendAsync("PUT", path, JsonContent.Create(new { pagesGranted = -1 }), csrf)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await admin.SendAsync("PUT", path, JsonContent.Create(new { pagesGranted = 12, resolveCreditRequest = true }), csrf)).StatusCode);
+        var trial = await (await regular.SendAsync("GET", "/api/trial")).Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(9, trial.GetProperty("pagesRemaining").GetInt32());
+        Assert.False(trial.GetProperty("creditRequested").GetBoolean());
+        var users = await (await admin.SendAsync("GET", "/api/admin/users?search=regular")).Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(1, users.GetProperty("total").GetInt32());
+        Assert.Equal(3, users.GetProperty("users")[0].GetProperty("pagesUsed").GetInt32());
+        using var upload = new MultipartFormDataContent();
+        var file = new ByteArrayContent(DocumentsControllerTests.ValidPdf());
+        file.Headers.ContentType = new("application/pdf");
+        upload.Add(file, "file", "private.pdf");
+        Assert.Equal(HttpStatusCode.Created, (await regular.SendAsync("POST", "/api/documents", upload, regularCsrf)).StatusCode);
+        Assert.Equal("[]", await (await admin.SendAsync("GET", "/api/documents")).Content.ReadAsStringAsync());
+        var metrics = await (await admin.SendAsync("GET", "/api/admin/metrics")).Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(2, metrics.GetProperty("users").GetInt32());
+        Assert.Equal(1, metrics.GetProperty("documents").GetInt32());
+        Assert.Equal(0, metrics.GetProperty("creditRequests").GetInt32());
+        Assert.Equal(HttpStatusCode.OK, (await admin.SendAsync("PUT", path, JsonContent.Create(new { pagesGranted = 1 }), csrf)).StatusCode);
+        trial = await (await regular.SendAsync("GET", "/api/trial")).Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(0, trial.GetProperty("pagesRemaining").GetInt32());
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<WidaDbContext>();
+            (await db.Users.SingleAsync(x => x.Email == "admin@example.com")).Role = Wida.Dal.Enums.UserRole.User;
+            await db.SaveChangesAsync();
+        }
+        Assert.Equal(HttpStatusCode.Forbidden, (await admin.SendAsync("GET", "/api/admin/metrics")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await admin.SendAsync("PUT", path, JsonContent.Create(new { pagesGranted = 100 }), csrf)).StatusCode);
     }
 
     [Fact]

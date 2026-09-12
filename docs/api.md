@@ -351,3 +351,13 @@ All trial routes require the normal user session; POST also requires CSRF.
 - `POST /api/processing/documents/{id}/invoice?reanalyze=true`: deliberately charges another analysis. Without the parameter, a completed result is reused.
 
 Page or storage exhaustion returns `429` with an explanatory `detail`; missing/unacceptable page counts return `400`; expired originals return `410` on content reads. Limits and reservations are detailed in [public beta](public-beta.md).
+
+## Administration
+
+Ces routes exigent une session avec le rôle `Admin`, revérifié en base. Les mutations exigent également le jeton antiforgery `X-CSRF-TOKEN`.
+
+- `GET /api/admin/users?search=&page=1` : utilisateurs paginés (25 par page), recherche par nom/e-mail, rôle, date d’inscription, pages accordées/consommées et date de demande de crédits. Les demandes sont présentées en premier.
+- `PUT /api/admin/users/{id}/trial` : `{ "pagesGranted": 12, "resolveCreditRequest": true }`. Le total accordé doit être un entier entre 0 et 1 000 000. La consommation passée reste intacte ; un plafond inférieur à la consommation laisse un solde nul. La résolution d’une demande est explicite. Les comptes admin sont sans limite et ne sont pas modifiables ici.
+- `GET /api/admin/metrics` : nombres globaux d’utilisateurs, documents, factures, analyses terminées/échouées/en cours, demandes de crédits et budget d’analyse du mois UTC. Les compteurs décrivent les enregistrements présents ; les relances sont des analyses distinctes. Le budget utilise le compteur de pages réservé par le traitement existant.
+
+Ces routes ne donnent pas accès aux fichiers ni au contenu des factures des autres utilisateurs. Les plafonds individuels ne modifient pas le budget mensuel partagé ni les limites techniques par fichier.
