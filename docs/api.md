@@ -48,6 +48,8 @@ The individual document, invoice, and processing-run reads return `404` when no 
 
 ## Documents
 
+The size/page/storage limits below apply to ordinary users. Administrators have application quota exemptions; host and Azure tier limits still apply. See [public beta](public-beta.md).
+
 Upload the original file as multipart form data, using the exact field name `file`:
 
 ```sh
@@ -131,6 +133,8 @@ Send `Content-Type: application/json`. Replace the example `documentId` with an 
 | `currency` | string or null | Optional; database maximum length is 3 |
 | `subtotalAmount` | number or null | Optional; participates in amount validation when supplied |
 | `taxAmount` | number or null | Optional; participates in amount validation when supplied |
+| `shippingAmount` | number or null | Optional additional charge; omitted values count as zero in validation |
+| `discountAmount` | number or null | Optional deduction; omitted values count as zero in validation |
 | `totalAmount` | number | Required |
 | `lines` | array of line objects | Optional; defaults to `[]` when omitted. Send an array, not `null`. |
 
@@ -156,8 +160,8 @@ The invoice validator checks the following rules before looking up the document:
 1. `supplierName`, `invoiceNumber`, `invoiceDate`, and `totalAmount` are required.
 2. If supplied, `dueDate` cannot be earlier than `invoiceDate`.
 3. When subtotal, tax, and total are all supplied, `subtotalAmount + taxAmount + shippingAmount - discountAmount` must equal `totalAmount`. Missing shipping and discount amounts count as zero. Shipping is an additional charge and discount is a deduction from the stated subtotal; do not enter adjustments already included in that subtotal.
-4. For each line where quantity, unit price, and line amount are supplied, `quantity × unitPrice` must equal `lineAmount`.
-5. When a subtotal and at least one line are supplied, and every line has a line amount, the sum of those amounts must equal the subtotal.
+4. For each line where quantity, unit price, and line amount are supplied, validate net arithmetic or a tax-inclusive amount supported by consistent tax evidence; see [adjustments](#shipping-and-discount-adjustments).
+5. When a subtotal and at least one line are supplied, and every line has a line amount, the sum of net amounts must equal the subtotal; recognized tax-inclusive lines use quantity × unit price for this check.
 
 All amount comparisons accept an absolute difference of up to and including `0.01`. These checks do not enforce positive amounts, supported currency codes, unique invoice numbers, or a relationship between tax rates and tax amounts.
 
@@ -188,7 +192,7 @@ curl --fail-with-body -X POST \
   "https://localhost:7127/api/processing/documents/$DOCUMENT_ID"
 ```
 
-This creates a `Pending` record with processor `Manual` and version `v1`. It does not enqueue work, start analysis, or progress automatically. The caller cannot choose the processor or version through this endpoint.
+This returns `200` with a new or existing idempotent `Pending` record with processor `Manual` and version `v1`. It does not enqueue work, start analysis, or progress automatically. The caller cannot choose the processor or version through this endpoint.
 
 ### Analyze an invoice
 
@@ -197,7 +201,7 @@ curl --fail-with-body -X POST \
   "https://localhost:7127/api/processing/documents/$DOCUMENT_ID/invoice"
 ```
 
-This endpoint enqueues a durable `Pending` job and returns `202 Accepted` with its processing response and a status `Location`. A repeated request for the same document returns the existing active job. The background worker performs Azure analysis and transitions it to `Running`, then `Completed` or `Failed`. Poll `GET /api/processing/{id}` for results. Admission is limited to one active job per user and 100 globally; a full queue returns `429` with `Retry-After: 10`. New admission requires RabbitMQ publisher confirmation; broker unavailability returns `503` and rolls back the new run, preserving the upload. See [queue deployment and recovery](processing-queue.md).
+This endpoint enqueues a durable `Pending` job and returns `202 Accepted` with its processing response and a status `Location`. A repeated request for the same document returns the existing active job. The background worker performs Azure analysis and transitions it to `Running`, then `Completed` or `Failed`. Poll `GET /api/processing/{id}` for results. For ordinary users, admission is limited to one active job per user and 100 globally; administrators bypass these application admission limits; a full queue returns `429` with `Retry-After: 10`. New admission requires RabbitMQ publisher confirmation; broker unavailability returns `503` and rolls back the new run, preserving the upload. See [queue deployment and recovery](processing-queue.md).
 
 The analyzer reads only the first document returned by Azure. It extracts these fields when present: `InvoiceId`, `InvoiceDate`, `DueDate`, `VendorName`, `SubTotal`, `TotalTax`, `InvoiceTotal`, and `TotalDiscount`. It also extracts `Items` fields as `Items[0].Description`, `Items[0].Quantity`, etc., using zero-based Azure array indices. Supported line fields are `Description`, `Quantity`, `Unit`, `UnitPrice`, `TaxRate`, `Tax`, and `Amount`. Each field retains its typed normalized value, raw text, confidence, page, bounding polygon, and review flag in the `extractedFields` collection. Empty or non-object rows and absent fields are skipped; no missing values are invented. No analyzed documents results in a `Failed` run. An analyzed document without any of the selected fields can complete with an empty `extractedFields` array.
 
@@ -354,10 +358,10 @@ Page or storage exhaustion returns `429` with an explanatory `detail`; missing/u
 
 ## Administration
 
-Ces routes exigent une session avec le rôle `Admin`, revérifié en base. Les mutations exigent également le jeton antiforgery `X-CSRF-TOKEN`.
+These routes require an `Admin` session, with the role rechecked in the database. Mutations also require `X-CSRF-TOKEN`.
 
-- `GET /api/admin/users?search=&page=1` : utilisateurs paginés (25 par page), recherche par nom/e-mail, rôle, date d’inscription, pages accordées/consommées et date de demande de crédits. Les demandes sont présentées en premier.
-- `PUT /api/admin/users/{id}/trial` : `{ "pagesGranted": 12, "resolveCreditRequest": true }`. Le total accordé doit être un entier entre 0 et 1 000 000. La consommation passée reste intacte ; un plafond inférieur à la consommation laisse un solde nul. La résolution d’une demande est explicite. Les comptes admin sont sans limite et ne sont pas modifiables ici.
-- `GET /api/admin/metrics` : nombres globaux d’utilisateurs, documents, factures, analyses terminées/échouées/en cours, demandes de crédits et budget d’analyse du mois UTC. Les compteurs décrivent les enregistrements présents ; les relances sont des analyses distinctes. Le budget utilise le compteur de pages réservé par le traitement existant.
+- `GET /api/admin/users?search=&page=1`: paginated users (25 per page), searchable by name/email, including role, registration date, granted/used pages, and credit request date. Pending requests sort first.
+- `PUT /api/admin/users/{id}/trial`: `{ "pagesGranted": 12, "resolveCreditRequest": true }`. The granted total must be an integer between 0 and 1,000,000. Previous consumption is preserved; a total below consumption leaves zero available pages. Resolving a request is explicit. Administrator accounts cannot be edited through this endpoint.
+- `GET /api/admin/metrics`: global counts of users, documents, invoices, completed/failed/active analyses, credit requests, and the current UTC month's reserved analysis pages. Counts reflect stored records; reanalyses are distinct runs.
 
-Ces routes ne donnent pas accès aux fichiers ni au contenu des factures des autres utilisateurs. Les plafonds individuels ne modifient pas le budget mensuel partagé ni les limites techniques par fichier.
+These routes do not expose other users' original files or invoice contents. Individual page grants do not change the shared monthly budget or provider file limits.

@@ -53,19 +53,20 @@ The processing controller maps a typed missing-document exception to `404` for b
 
 ```mermaid
 erDiagram
-    Users o|--o{ Documents : owns
+    Users ||--o{ Documents : owns
     Documents ||--o| Invoices : has
     Invoices ||--o{ InvoiceLines : contains
     Documents ||--o{ ProcessingRuns : tracks
     ProcessingRuns ||--o{ ExtractedFields : records
 ```
 
-All entity primary keys are application-generated GUIDs. Document, invoice, and processing timestamps are initialized in UTC; invoice and due dates use `DateOnly`. Document-to-invoice/run and invoice/run-to-child relationships use cascade deletion. The optional user-owner relationship uses restricted deletion. The API has no deletion endpoints.
+All entity primary keys are application-generated GUIDs. Document, invoice, and processing timestamps are initialized in UTC; invoice and due dates use `DateOnly`. Document-to-invoice/run and invoice/run-to-child relationships use cascade deletion. The required user-owner relationship uses restricted deletion. The API has no deletion endpoints.
 
 | Entity | Stored data |
 | --- | --- |
-| `AppUser` | Google subject, email, display name, and creation timestamp. |
-| `Document` | Nullable owner user ID, original filename, content type, storage path, document type/status, upload and audit timestamps. |
+| `AppUser` | Google subject, email, display name, role, granted/used analysis pages, pending credit request, and creation timestamp. |
+| `AnalysisBudget` | UTC month identifier and reserved page count shared across accounts. |
+| `Document` | Required owner user ID, page count, content hash, original filename, content type, storage path, document type/status, upload and audit timestamps. |
 | `Invoice` | Supplier and invoice details, dates, currency, amounts, audit timestamps, and document ID. |
 | `InvoiceLine` | Position, description, quantity, unit, pricing/tax values, and invoice ID. |
 | `ProcessingRun` | Processor/version, status, timestamps, error details, raw result, and document ID. |

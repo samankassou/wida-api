@@ -1,6 +1,6 @@
 # Wida API
 
-Wida is an ASP.NET Core API for uploading documents, recording invoices and line items, and tracking invoice analysis with Azure Document Intelligence. It targets .NET 10, stores application data in PostgreSQL through Entity Framework Core, and saves uploaded files on the API filesystem.
+Wida is an open-source ASP.NET Core API for uploading documents, recording invoices and line items, and tracking invoice analysis with Azure Document Intelligence. It targets .NET 10, stores application data in PostgreSQL through Entity Framework Core, and saves uploaded files on the API filesystem.
 
 ## Documentation
 
@@ -21,9 +21,11 @@ Wida is an ASP.NET Core API for uploading documents, recording invoices and line
 - Retrieve processing status, extracted fields, confidence scores, and failure information.
 - Inspect the API through OpenAPI and Scalar in Development with an authenticated session.
 
-Analysis is queued durably in RabbitMQ and processed by a .NET background worker. The endpoint returns 202 immediately; clients poll the run for completion. See [queue setup and recovery](docs/processing-queue.md). It records extracted fields and updates unsaved documents through processing/review/failure states. Saving invoice data sets `Saved`; reanalysis preserves that state even when saving occurs while extraction is still running. Analysis extracts invoice headers and line items but does not create an invoice. Approval and export are not implemented. The API requires a Google-backed Wida session and restricts each user to their own documents. See [Google sign-in and pilot access](docs/authentication.md).
+Analysis is queued durably in RabbitMQ and processed by a .NET background worker. The endpoint returns 202 immediately; clients poll the run for completion. See [queue setup and recovery](docs/processing-queue.md). It records extracted fields and updates unsaved documents through processing/review/failure states. Saving invoice data sets `Saved`; reanalysis preserves that state even when saving occurs while extraction is still running. Analysis extracts invoice headers and line items but does not create an invoice. The API has no approval or export endpoints; the companion frontend exports loaded invoice headers as CSV. The API requires a Google-backed Wida session and restricts each user to their own documents. See [Google sign-in and pilot access](docs/authentication.md).
 
 ## Getting started
+
+Clone this repository for the backend. The [companion frontend](https://github.com/samankassou/wida-front) provides the browser workspace and an independent demo.
 
 You need the .NET 10 SDK and a PostgreSQL database. Invoice analysis also requires an Azure Document Intelligence endpoint and API key; reading processing runs and creating manual runs do not. Follow the [local setup guide](Wida.Api/README.md#local-setup) to configure User Secrets, restore dependencies, apply migrations, configure Google pilot access, and start the HTTP profile for the local frontend.
 
@@ -38,15 +40,17 @@ dotnet test Wida.slnx
 
 `Wida.Tests` exercises the analysis workflow with Azure response fixtures, SQLite for transactional processing/concurrency tests, and EF InMemory for the remaining service fixtures. The [build check](Wida.Api/README.md#build-check) also describes verification against your own PostgreSQL database and Azure resource.
 
-## Verification baseline
+## Historical verification baseline
 
 On 10 September 2026, all **81 API tests** passed for commit `2e4011e`. Processing/concurrency tests use SQLite transactions so failed saves roll back before retry. Authentication HTTP tests use simulated Google responses with real cookie/antiforgery middleware, while other service fixtures use EF InMemory. No live Google, PostgreSQL, or Azure end-to-end result is implied by these tests.
+
+## Contributing and deployment
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) for issue reports, development checks, and pull requests. Use the [deployment checklist](docs/deployment.md) before opening a hosted instance to users.
 
 ## Licence
 
 This project is licensed under the [MIT License](LICENSE).
-
-Shipping is entered manually and discount can prefill from Azure `TotalDiscount`.
 
 ## Public beta
 

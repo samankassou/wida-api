@@ -1,6 +1,6 @@
-# Google sign-in and pilot access
+# Google sign-in and access modes
 
-Wida uses Google OpenID Connect authorization-code flow with PKCE. The API validates Google's response, checks the verified email against the pilot allowlist, and creates a local user linked to Google's stable `sub` identifier. It issues its own HttpOnly session cookie. Google tokens are not saved in the browser or session.
+Wida uses Google OpenID Connect authorization-code flow with PKCE. The API validates Google's response, requires a verified email and, when public beta is disabled, checks the invitation allowlist, and creates a local user linked to Google's stable `sub` identifier. It issues its own HttpOnly session cookie. Google tokens are not saved in the browser or session.
 
 ## Local configuration
 
@@ -19,7 +19,9 @@ Wida uses Google OpenID Connect authorization-code flow with PKCE. The API valid
    dotnet user-secrets set "Authentication:Google:ClientId" "YOUR_CLIENT_ID.apps.googleusercontent.com"
    dotnet user-secrets set "Authentication:Google:ClientSecret" "YOUR_CLIENT_SECRET"
    dotnet user-secrets set "Authentication:PublicOrigin" "http://localhost:3000"
+   dotnet user-secrets set "Authentication:PublicBeta" "false"
    dotnet user-secrets set "Authentication:AllowedEmails:0" "YOUR_INVITED_EMAIL"
+   dotnet user-secrets set "Authentication:AdminEmail" "YOUR_ADMIN_EMAIL"
    ```
 
    Add invited addresses using indexes `1`, `2`, etc. The application does not send invitation emails. When `Authentication:PublicBeta=false`, an empty allowlist denies all sign-ins and removing an address invalidates its session. Public beta mode (default) accepts all verified Google emails; restart after changing User Secrets.
@@ -41,7 +43,7 @@ Wida uses Google OpenID Connect authorization-code flow with PKCE. The API valid
 
 6. Open `http://localhost:3000` in a regular browser and select **Continuer avec Google** with the invited account. The app requests `openid`, `email`, and `profile`.
 
-Without Google credentials the API starts with data endpoints protected and the frontend explains that sign-in is not configured. There is no anonymous live mode. The browser-only demo remains available when `WIDA_API_URL` is unset.
+Without Google credentials the API starts with data endpoints protected and the frontend explains that sign-in is not configured. There is no anonymous live mode. The browser-only `/demo` route remains available even when `WIDA_API_URL` is configured.
 
 ## Deployment
 
@@ -50,12 +52,14 @@ Without Google credentials the API starts with data endpoints protected and the 
 | `Authentication:Google:ClientId` | `Authentication__Google__ClientId` |
 | `Authentication:Google:ClientSecret` | `Authentication__Google__ClientSecret` |
 | `Authentication:PublicOrigin` | `Authentication__PublicOrigin` |
+| `Authentication:PublicBeta` | `Authentication__PublicBeta` |
+| `Authentication:AdminEmail` | `Authentication__AdminEmail` |
 | `Authentication:AllowedEmails:0` | `Authentication__AllowedEmails__0` |
 | `Authentication:DataProtectionKeysPath` | `Authentication__DataProtectionKeysPath` |
 
 Use the same HTTPS frontend origin in API `Authentication:PublicOrigin` and frontend `WIDA_PUBLIC_ORIGIN`. Register its `/api/wida/auth/callback` URL in Google. The API can use private HTTP behind the frontend: public request scheme and Secure cookies derive from server configuration, never untrusted forwarded headers. Keep the API private behind the frontend in deployment.
 
-Outside Development, startup requires an HTTPS public origin and persistent Data Protection key directory. Restrict its filesystem permissions and protect it with encrypted storage. Replicas must share compatible persistent keys. Uploads and PostgreSQL also require durable storage.
+Outside Development, startup requires an HTTPS public origin and persistent Data Protection key directory. Restrict its filesystem permissions and protect it with encrypted storage. Replicas must share compatible persistent keys. Uploads, PostgreSQL, and RabbitMQ also require durable storage. Configure [trusted client-IP forwarding](public-beta.md#trusted-client-ip-required-for-live-production); it is required for live production. See the [deployment checklist](deployment.md).
 
 The session lasts eight hours with sliding renewal. Cookies use HttpOnly and SameSite, plus Secure under HTTPS. Every authenticated request rechecks the user and, in invitation mode, the invitation. Logout removes the browser's Wida session; it does not sign the person out of Google.
 
@@ -63,7 +67,7 @@ The session lasts eight hours with sliding renewal. Cookies use HttpOnly and Sam
 
 | Method | Route | Behavior |
 | --- | --- | --- |
-| GET | `/api/auth/session` | Public uncached `{authenticated, googleConfigured, user: {id,email,displayName} or null, csrfToken}`; sets antiforgery cookie. |
+| GET | `/api/auth/session` | Public uncached `{authenticated, googleConfigured, user: {id,email,displayName,role} or null, csrfToken}`; sets antiforgery cookie. |
 | GET | `/api/auth/login?returnUrl=/` | Public Google challenge; accepts only root workspace return paths. |
 | GET | `/api/auth/callback` | Internal callback handled by OIDC middleware. Public callback is `/api/wida/auth/callback`. |
 | POST | `/api/auth/logout` | Requires session cookie and `X-CSRF-TOKEN`; clears Wida session. |

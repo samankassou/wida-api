@@ -17,6 +17,8 @@
 
 ## Deployment
 
+Start with the [deployment checklist](deployment.md), including administrator identity, persistent storage, backups, and verification. These are application defaults for a self-hosted instance, not a promise of a hosted service or free third-party resources.
+
 Run migrations **before restarting API and worker**:
 
 ```sh
@@ -27,7 +29,7 @@ Do not run `EnsureCreated` on an existing database. Existing users receive a 4-p
 
 ## Credit requests
 
-Users submit an idempotent request in the workspace. No email is sent. Inspect and grant from a trusted operator terminal with the normal database configuration:
+Users submit an idempotent request in the workspace. No email is sent. Administrators can manage requests through the [administration endpoints](api.md#administration). Alternatively, inspect and grant from a trusted operator terminal with the normal database configuration:
 
 ```sh
 dotnet run --project Wida.Api -- --list-credit-requests true
@@ -46,9 +48,9 @@ Optionally configure `Turnstile:SiteKey` and `Turnstile:SecretKey` together, res
 
 ## User and administrator profiles
 
-New accounts default to `User`. `Authentication:AdminEmail` is set to `samankassoufoulla@gmail.com`: its verified Google login grants the persisted `Admin` role, including for an already registered account. Sign out and sign back in after deploying the role migration to activate this initial assignment. Roles are read from PostgreSQL on every authenticated request, so a role change updates existing sessions; the browser refreshes its role on focus.
+New accounts default to `User`. `Authentication:AdminEmail` selects the account whose verified Google login grants the persisted `Admin` role, including for an already registered account. The checked-in configuration currently contains a maintainer-specific address: override it with your own address (or an empty value to disable automatic assignment) before running your own instance. Never rely on the repository default for an administrator identity. Sign out and sign back in after deploying the role migration to activate this initial assignment. Roles are read from PostgreSQL on every authenticated request, so a role change updates existing sessions; the browser refreshes its role on focus.
 
-Admins have no Wida page allowance, monthly admission ceiling, active-job count, file-size/page-count upload quota, document-count quota, rate limiter, CAPTCHA requirement or original expiry. File-format validation, authentication, CSRF, ownership isolation, idempotency and Azure service constraints still apply. Admins manage their own workspace; this role does not expose other accounts' private documents.
+Admins have no Wida page allowance, monthly admission ceiling, active-job count, file-size/page-count upload quota, document-count quota, rate limiter, CAPTCHA requirement or original expiry. File-format validation, authentication, CSRF, ownership isolation, idempotency and Azure service constraints still apply. Admins manage their own workspace and can inspect account metadata, adjust user credits, and view aggregate metrics through the [administration endpoints](api.md#administration). This role does not expose other accounts' original files or invoice contents.
 
 Azure consumption by admins is still recorded in the shared monthly ledger, so public users cannot reserve capacity already consumed by admins. Admin admissions may exceed 400 pages. Azure F0 itself still imposes two analyzed pages and 4 MiB: larger admin uploads can be saved and entered manually, but automatic analysis is refused before submission to prevent silent truncation. After configuring an actual S0 resource, set `AzureDocumentIntelligence:Tier=S0`. Merely changing this setting does not upgrade Azure. The existing worker cadence is retained for provider reliability.
 

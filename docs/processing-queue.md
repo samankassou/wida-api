@@ -2,20 +2,15 @@
 
 RabbitMQ distributes analysis work. A .NET `BackgroundService` consumes messages; PostgreSQL stores processing history, ownership, results and the Azure operation ID. There is no database queue scan, database worker election, or database outbox dispatcher.
 
-## Local development with Lerd
+## Local development
 
-RabbitMQ 3.13.7 works with the current transport: quorum queues, publisher confirms, single active consumer and dead lettering do not require RabbitMQ 4. The installed Lerd service was verified with the two-worker integration test (including duplicate delivery and resuming the saved Azure operation). The other two integration tests encountered PostgreSQL database-creation timeouts in that environment; they were not validated in that run. Azure was simulated.
-
-Start the existing service and configure the API from `Wida.Api`:
+Use a RabbitMQ service with quorum queues, publisher confirms, single active consumer, and dead lettering. From `Wida.Api`, configure your own broker credentials:
 
 ```sh
-lerd service start rabbitmq
 dotnet user-secrets set "RabbitMQ:Uri" "amqp://USER:URL_ENCODED_PASSWORD@127.0.0.1:5672/%2F"
 ```
 
-Use the credentials and published port from the Lerd RabbitMQ service definition. `%2F` selects RabbitMQ's default `/` virtual host. Restart the API after configuring its connection. The worker is enabled by default and creates its queues automatically; no broker-version switch or client-package downgrade is needed.
-
-Lerd's service configuration is distinct from the native VPS configuration below. In particular, do not bind the broker inside Lerd's service to container loopback: the host API connects through its published port. See [Lerd services](https://lerd.sh/getting-started/services) and [RabbitMQ 3.13 quorum queues](https://www.rabbitmq.com/docs/3.13/quorum-queues).
+Replace the host, port, credentials, and virtual host for your installation. `%2F` selects the default `/` virtual host. The worker is enabled by default and declares its queues automatically. If your broker runs in a container, publish its port only to the interface needed by the API and persist its data. No particular local service manager is required.
 
 ## Connect to a native RabbitMQ service
 
@@ -44,7 +39,7 @@ The API hosts the worker by default. Set `ProcessingQueue__Enabled=false` on API
 
 ## Database initialization and recovery
 
-Initialize an empty database with the single `InitialCreate` migration. It includes required document ownership and the analysis tracking metadata used for RabbitMQ delivery recovery.
+Apply all committed migrations, including `InitialCreate`, `PublicTrial`, and `UserRoles`. They provide document ownership, analysis recovery metadata, trial budgets, and account roles.
 
 ```sh
 # From wida-api/Wida.Api
@@ -65,7 +60,7 @@ This operator-only command does not create a run or bypass ownership on API requ
 
 `POST /api/processing/documents/{documentId}/invoice` returns **202 Accepted** only after RabbitMQ confirms publication and PostgreSQL commits admission. The response includes the run and its status `Location`. Repeating an active request returns the same run without publishing another message. A broker outage returns **503** with `Retry-After: 10`; a new admission is rolled back and the previously uploaded document remains available.
 
-Admission is limited to one active job per user and 100 globally. A short PostgreSQL transaction/advisory lock (`73190421`) serializes these business checks; a partial unique index prohibits two active runs for one document. This lock is not used to distribute jobs or elect a worker. The same lock also protects lifetime page debits and the shared monthly budget; see [public beta](public-beta.md).
+For ordinary users, admission is limited to one active job per user and 100 globally. Administrators bypass these application admission checks; broker capacity still applies. A short PostgreSQL transaction/advisory lock (`73190421`) serializes these business checks; a partial unique index prohibits two active runs for one document. This lock is not used to distribute jobs or elect a worker. The same lock also protects lifetime page debits and the shared monthly budget; see [public beta](public-beta.md).
 
 To avoid a database outbox and a lost-message gap, publication is confirmed **before** the admission transaction commits. On delivery, the consumer briefly takes the same transaction lock before looking up that one run ID. It therefore waits for admission to commit or roll back. If admission rolled back after RabbitMQ accepted the message, the orphan ID goes to the failed queue. No Azure request is made for an orphan. A network error during confirmation/commit may yield a failed HTTP response despite accepted work; retry the same document or inspect its history. This is not a distributed transaction or an exactly-once guarantee.
 
