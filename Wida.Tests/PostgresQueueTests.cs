@@ -36,6 +36,21 @@ public sealed class RabbitMqQueueFactAttribute : FactAttribute
 public sealed class PostgresQueueTests
 {
     [PostgresQueueFact]
+    public async Task Concurrent_manual_requests_across_contexts_create_only_one_run()
+    {
+        await using var f = await Fixture.CreateAsync();
+        var responses = await Task.WhenAll(Enumerable.Range(0, 16).Select(async _ =>
+        {
+            await using var db = f.Open();
+            return await new Wida.Dal.Repositories.Implementations.ProcessingRunRepository(db)
+                .GetOrCreateManualAsync(new ProcessingRun { DocumentId = f.DocumentId, Processor = "Manual" });
+        }));
+        Assert.Single(responses.Select(x => x.Id).Distinct());
+        await using var check = f.Open();
+        Assert.Equal(1, await check.ProcessingRuns.CountAsync());
+    }
+
+    [PostgresQueueFact]
     public async Task Concurrent_admission_returns_one_durable_run_and_enforces_user_capacity()
     {
         await using var f = await Fixture.CreateAsync();

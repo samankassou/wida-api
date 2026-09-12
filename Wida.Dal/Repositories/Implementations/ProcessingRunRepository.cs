@@ -14,6 +14,26 @@ public class ProcessingRunRepository : IProcessingRunRepository
         _context = context;
     }
 
+    public async Task<ProcessingRun> GetOrCreateManualAsync(ProcessingRun run, CancellationToken cancellationToken = default)
+    {
+        if (run.IsBackgroundJob) throw new ArgumentException("Expected a manual run.", nameof(run));
+        await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
+        // Serialize across API replicas, using the same admission lock as uploads/queueing.
+        // Query after acquiring the lock so concurrent requests see the committed winner.
+        if (_context.Database.IsNpgsql())
+            await _context.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(73190421)", cancellationToken);
+        var existing = await _context.ProcessingRuns.Include(x => x.ExtractedFields)
+            .Where(x => x.DocumentId == run.DocumentId && !x.IsBackgroundJob && x.Processor == run.Processor)
+            .OrderBy(x => x.StartedAt).ThenBy(x => x.Id).FirstOrDefaultAsync(cancellationToken);
+        if (existing is null)
+        {
+            _context.ProcessingRuns.Add(run);
+            await _context.SaveChangesAsync(cancellationToken);
+        }
+        await transaction.CommitAsync(cancellationToken);
+        return existing ?? run;
+    }
+
     public Task<ProcessingRun?> GetByIdAsync(
         Guid id,
         CancellationToken cancellationToken = default)

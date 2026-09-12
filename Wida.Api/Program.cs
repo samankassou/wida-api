@@ -57,21 +57,7 @@ builder.Services.AddScoped<TrialChallenge>();
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = 429;
-    options.GlobalLimiter = System.Threading.RateLimiting.PartitionedRateLimiter.CreateChained(
-        System.Threading.RateLimiting.PartitionedRateLimiter.Create<HttpContext, string>(context =>
-            context.User.IsInRole("Admin")
-                ? System.Threading.RateLimiting.RateLimitPartition.GetNoLimiter("admin")
-                : System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
-                context.Connection.RemoteIpAddress?.ToString() ?? "unknown", _ => new()
-                { PermitLimit = 600, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 })),
-        System.Threading.RateLimiting.PartitionedRateLimiter.Create<HttpContext, string>(context =>
-            context.User.IsInRole("Admin")
-                ? System.Threading.RateLimiting.RateLimitPartition.GetNoLimiter("admin")
-                : System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
-                (context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "anonymous")
-                    + (HttpMethods.IsGet(context.Request.Method) ? ":read" : ":write"), _ => new()
-                { PermitLimit = HttpMethods.IsGet(context.Request.Method) ? 120 : 12,
-                    Window = TimeSpan.FromMinutes(1), QueueLimit = 0 })));
+    options.GlobalLimiter = ClientRateLimits.Create();
 });
 var app = builder.Build();
 
@@ -119,6 +105,8 @@ if (builder.Configuration.GetValue("list-credit-requests", false))
     return;
 }
 
+var trustedClientIp = new TrustedClientIp(builder.Configuration, builder.Environment);
+
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
@@ -145,6 +133,7 @@ app.Use(async (context, next) =>
         await context.Response.WriteAsJsonAsync(new { title = "Limite de la bêta", detail = ex.Message });
     }
 });
+app.Use(trustedClientIp.InvokeAsync);
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseRateLimiter();

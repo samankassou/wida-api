@@ -21,6 +21,23 @@ namespace Wida.Tests;
 public class ProcessingServiceTests
 {
     [Fact]
+    public async Task Repeated_manual_requests_reuse_the_persisted_run_without_calling_Azure()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var analyzer = new StubAnalyzer((_, _) => throw new Exception("Analyzer must not run."));
+        var first = await fixture.Service(analyzer).CreateAsync(fixture.Document.Id, "Manual", "v1");
+        for (var i = 0; i < 20; i++)
+        {
+            await using var db = fixture.OpenContext();
+            var service = new ProcessingService(new ProcessingRunRepository(db), new DocumentRepository(db), analyzer);
+            var repeated = await service.CreateAsync(fixture.Document.Id, "Manual", "v2");
+            Assert.Equal(first.Id, repeated.Id);
+        }
+        Assert.Single(await fixture.Context.ProcessingRuns.ToListAsync());
+        Assert.Equal(0, analyzer.CallCount);
+    }
+
+    [Fact]
     public async Task Analysis_persists_running_state_then_inserts_fields_and_returns_typed_values()
     {
         await using var fixture = await Fixture.CreateAsync();

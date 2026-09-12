@@ -4,6 +4,8 @@ namespace Wida.Dal.Repositories.Interfaces;
 
 public interface IProcessingRunRepository
 {
+    Task<ProcessingRun> GetOrCreateManualAsync(ProcessingRun run, CancellationToken cancellationToken = default);
+
     Task<ProcessingRun?> GetByIdAsync(
         Guid id,
         CancellationToken cancellationToken = default);

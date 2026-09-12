@@ -31,7 +31,7 @@ public class ProcessingController : ControllerBase
                 processorVersion: "v1",
                 cancellationToken);
 
-            return CreatedAtAction(nameof(GetById), new { id = run.Id }, run);
+            return Ok(run);
         }
         catch (DocumentNotFoundException ex)
         {

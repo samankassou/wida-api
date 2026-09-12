@@ -49,14 +49,7 @@ public class ProcessingService : IProcessingService
             StartedAt = DateTime.UtcNow
         };
 
-        await _processingRunRepository.AddAsync(
-            processingRun,
-            cancellationToken);
-
-        await _processingRunRepository.SaveChangesAsync(
-            cancellationToken);
-
-        return Map(processingRun);
+        return Map(await _processingRunRepository.GetOrCreateManualAsync(processingRun, cancellationToken));
     }
 
     public async Task<ProcessingRunResponse?> GetByIdAsync(

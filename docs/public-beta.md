@@ -12,7 +12,8 @@
 - A queued submission crossing a UTC month boundary reserves capacity in the new month before submitting. The old reservation is retained conservatively. Legacy unreserved queue jobs fail without calling Azure.
 - SHA-256 deduplicates imports within each owner. Reupload returns the existing document and retains its invoice/history. Normal analysis POST reuses its completed result. `?reanalyze=true` requests a paid reanalysis; active jobs remain idempotent.
 - Originals stop being downloadable after 30 days from upload; hourly cleanup removes expired originals unless analysis is active. Invoice records and credit/history data remain. Reuploading an expired original restores that original in the existing record.
-- Per API instance: 120 reads/minute and 12 writes/minute per account, plus 600 requests/minute per connection IP. The API does not trust arbitrary forwarded IP headers. Behind the Next.js proxy, the IP limit is shared by the proxy connection: configure client-IP rate limiting at your trusted public ingress as well. Database quotas remain global across replicas.
+- Per API instance: 120 reads/minute and 12 writes/minute per authenticated account, or per verified client IP for anonymous visitors. There is no shared proxy-IP quota or shared anonymous bucket. An account keeps its quota when its IP changes. Configure trusted client-IP forwarding as described below. Database quotas remain global across replicas; rate limits remain per instance.
+- Manual processing creation is idempotent per document/processor: repeated requests return the existing run (`200`), without creating history entries. PostgreSQL admission locking also covers concurrent requests across replicas. Existing duplicate history is preserved.
 
 ## Deployment
 
@@ -59,3 +60,13 @@ dotnet run --project Wida.Api -- --set-user-role person@example.com --role User
 ```
 
 To demote the configured initial admin, first remove/change `Authentication:AdminEmail`, then use the second command; otherwise the next verified login grants Admin again. No HTTP signup/profile payload can assign roles. Files already purged before promotion cannot be recovered by changing a role.
+
+## Trusted client IP (required for live production)
+
+The public ingress must overwrite a dedicated single-IP header with the actual client address, and Next.js must only be reachable through that ingress. For example, when Nginx directly receives the public connection, use `proxy_set_header X-Real-IP $remote_addr;` and set frontend `WIDA_CLIENT_IP_HEADER=x-real-ip`. If Nginx itself sits behind another proxy, configure its trusted real-IP handling first. Do not take the first value of an arbitrary `X-Forwarded-For` chain or use a header the caller can supply unchanged.
+
+Next.js validates that header as one IPv4/IPv6 address and sends it as `X-Wida-Client-IP`, replacing any caller-supplied value. Configure API `RateLimiting__TrustedProxies__0` (and `__1`, etc.) with the exact connection IP addresses of your Next.js servers as seen by the API. The API rejects other peers and missing/malformed client IPs. Keep the API port private. With a same-host proxy this may be `127.0.0.1` and/or `::1`; use your actual topology, not these examples blindly.
+
+Production API startup fails without a trusted proxy list; the production frontend returns `503` if the ingress header configuration or IP is missing. Deploy the environment settings with these changes. Local Development without the settings uses the socket IP and ignores all caller-supplied IP headers. No database migration is required for these fixes.
+
+Trust is restricted to known proxy addresses, consistent with [ASP.NET Core proxy guidance](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/proxy-load-balancer?view=aspnetcore-10.0). Continue to apply ingress-level traffic limits to protect the frontend and authentication middleware before application-level account quotas run.

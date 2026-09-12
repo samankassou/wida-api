@@ -31,7 +31,7 @@ All document, invoice, processing and original-file endpoints require a Wida ses
 | `GET` | `/api/invoices/document/{documentId}` | None | `200`, invoice with lines |
 | `POST` | `/api/invoices` | Invoice JSON | `201`, invoice with lines |
 | `PUT` | `/api/invoices/{id}` | Same invoice JSON; unchanged document ID | `200`, updated invoice with replacement lines |
-| `POST` | `/api/processing/documents/{documentId}` | No body | `201`, manual processing run |
+| `POST` | `/api/processing/documents/{documentId}` | No body | `200`, creates or reuses the document’s manual processing run |
 | `POST` | `/api/processing/documents/{documentId}/invoice` | No body | `202`, queued/active analysis run; `429` if queue capacity is exhausted; `503` if RabbitMQ is unavailable |
 | `GET` | `/api/processing/{id}` | None | `200`, processing run |
 | `GET` | `/api/processing/documents/{documentId}` | None | `200`, array of runs, newest start first |
