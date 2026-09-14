@@ -25,6 +25,24 @@ namespace Wida.Tests;
 public sealed class AuthHttpTests
 {
     [Theory]
+    [InlineData(null, "/workspace")]
+    [InlineData("/workspace", "/workspace")]
+    [InlineData("/workspace?document=abc", "/workspace?document=abc")]
+    [InlineData("/?document=abc", "/workspace?document=abc")]
+    [InlineData("/", "/workspace")]
+    [InlineData("https://evil.example", "/workspace")]
+    [InlineData("//evil.example", "/workspace")]
+    [InlineData("/workspace/../login", "/workspace")]
+    [InlineData("/workspace-other", "/workspace")]
+    [InlineData("/workspace?x=\r\n", "/workspace")]
+    public async Task Google_return_path_stays_in_workspace(string? path, string expected)
+    {
+        await using var factory = new AuthFactory();
+        var access = factory.Services.GetRequiredService<PilotAccess>();
+        Assert.Equal("http://localhost:3000" + expected, access.ReturnUrl(path));
+    }
+
+    [Theory]
     [InlineData("GET", "/api/admin/users")]
     [InlineData("GET", "/api/admin/metrics")]
     [InlineData("PUT", "/api/admin/users/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/trial")]
@@ -160,7 +178,7 @@ public sealed class AuthHttpTests
         await using var factory = new AuthFactory();
         using var browser = new TestBrowser(factory);
         var response = await browser.GoogleLoginAsync("alice@example.com", "google-alice");
-        Assert.True(response.Headers.Location?.AbsoluteUri == "http://localhost:3000/", factory.Failure?.ToString() ?? response.Headers.Location?.ToString());
+        Assert.True(response.Headers.Location?.AbsoluteUri == "http://localhost:3000/workspace", factory.Failure?.ToString() ?? response.Headers.Location?.ToString());
         var session = await browser.SessionAsync();
         Assert.True(session.GetProperty("authenticated").GetBoolean());
         Assert.Equal("alice@example.com", session.GetProperty("user").GetProperty("email").GetString());

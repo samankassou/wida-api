@@ -37,9 +37,17 @@ public sealed class PilotAccess(IConfiguration configuration, IWebHostEnvironmen
     }
 
     // Only workspace URLs are accepted; never redirect to a supplied host or scheme.
-    public string ReturnUrl(string? path) => PublicOrigin +
-        (path is not null && (path == "/" || path.StartsWith("/?", StringComparison.Ordinal))
-            && !path.Any(char.IsControl) && !path.Contains('\\') ? path : "/");
+    public string ReturnUrl(string? path)
+    {
+        if (path is null || path.Any(char.IsControl) || path.Contains('\\'))
+            return PublicOrigin + "/workspace";
+        if (path == "/workspace" || path.StartsWith("/workspace?", StringComparison.Ordinal))
+            return PublicOrigin + path;
+        // Preserve document bookmarks from before the workspace moved off the homepage.
+        if (path == "/" || path.StartsWith("/?", StringComparison.Ordinal))
+            return PublicOrigin + "/workspace" + path[1..];
+        return PublicOrigin + "/workspace";
+    }
 
     public string LoginError(string code) => PublicOrigin + "/login?error=" + Uri.EscapeDataString(code);
 }
