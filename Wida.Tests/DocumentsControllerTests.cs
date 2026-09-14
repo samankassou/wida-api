@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Wida.Dal.Storage;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Wida.Dal.Persistence;
@@ -284,8 +285,54 @@ public sealed class DocumentsControllerTests : IDisposable
         Assert.Equal(3, (await db.Documents.SingleAsync(x => x.Id == record.Id)).PageCount);
     }
 
-    private DocumentsController CreateController(IDocumentService service) =>
-        new(service, new TestWebHostEnvironment { ContentRootPath = _contentRoot })
+    [Fact]
+    public async Task Remote_upload_stores_object_location_and_size_and_removes_temporary_file()
+    {
+        var bytes = ValidPdf();
+        using var source = new MemoryStream(bytes);
+        var file = new FormFile(source, 0, bytes.Length, "file", "invoice.pdf") { Headers = new HeaderDictionary(), ContentType = "application/pdf" };
+        var storage = new MemoryStorage();
+        var record = CreateDocument();
+        var service = new StubDocumentService(async (name, type, location, token) =>
+        {
+            Assert.StartsWith("supabase:", location);
+            Assert.Equal(bytes, storage.Bytes);
+            db.Documents.Add(new Document { Id = record.Id, StoragePath = location });
+            await db.SaveChangesAsync(token);
+            return record;
+        }) { Record = record };
+        Assert.IsType<CreatedAtActionResult>(await CreateController(service, storage).Upload(file, default));
+        Assert.Equal(bytes.LongLength, (await db.Documents.SingleAsync()).SizeBytes);
+        Assert.Empty(Directory.GetFiles(_contentRoot, "*", SearchOption.AllDirectories));
+        Assert.False(storage.Deleted);
+    }
+
+    [Fact]
+    public async Task Failed_remote_metadata_save_removes_uploaded_object_and_temporary_file()
+    {
+        var bytes = ValidPdf();
+        using var source = new MemoryStream(bytes);
+        var file = new FormFile(source, 0, bytes.Length, "file", "invoice.pdf") { Headers = new HeaderDictionary(), ContentType = "application/pdf" };
+        var storage = new MemoryStorage();
+        var service = new StubDocumentService((_, _, _, _) => throw new InvalidOperationException("Metadata failed"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => CreateController(service, storage).Upload(file, default));
+        Assert.True(storage.Deleted);
+        Assert.Empty(Directory.GetFiles(_contentRoot, "*", SearchOption.AllDirectories));
+    }
+
+    private sealed class MemoryStorage : IDocumentStorage
+    {
+        public byte[]? Bytes;
+        public bool Deleted;
+        public async Task<string> PersistAsync(string path, string contentType, CancellationToken token)
+        { Bytes = await File.ReadAllBytesAsync(path, token); return "supabase:test.pdf"; }
+        public Task<Stream> OpenReadAsync(string location, CancellationToken token) => Task.FromResult<Stream>(new MemoryStream(Bytes!));
+        public Task<bool> ExistsAsync(string location, CancellationToken token) => Task.FromResult(Bytes is not null && !Deleted);
+        public Task DeleteAsync(string location, CancellationToken token) { Deleted = true; return Task.CompletedTask; }
+    }
+
+    private DocumentsController CreateController(IDocumentService service, IDocumentStorage? storage = null) =>
+        new(service, new TestWebHostEnvironment { ContentRootPath = _contentRoot }, storage)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext { RequestServices = new ServiceCollection().AddSingleton(db).BuildServiceProvider() } }
         };

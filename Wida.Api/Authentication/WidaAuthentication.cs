@@ -1,4 +1,6 @@
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using System.Security.Cryptography.X509Certificates;
+using Wida.Dal.Persistence;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
@@ -22,7 +24,18 @@ public static class WidaAuthentication
         services.AddScoped<WidaCookieEvents>();
         var protection = services.AddDataProtection().SetApplicationName("Wida.Api");
         var keyPath = configuration["Authentication:DataProtectionKeysPath"];
-        if (!string.IsNullOrWhiteSpace(keyPath)) protection.PersistKeysToFileSystem(new DirectoryInfo(keyPath));
+        if (configuration["Authentication:DataProtectionProvider"] == "Database")
+        {
+            protection.PersistKeysToDbContext<WidaDbContext>();
+            var encodedCertificate = configuration["Authentication:DataProtectionCertificateBase64"];
+            if (string.IsNullOrWhiteSpace(encodedCertificate))
+                throw new InvalidOperationException("Database session keys require Authentication:DataProtectionCertificateBase64 (PFX).");
+            var certificate = X509CertificateLoader.LoadPkcs12(Convert.FromBase64String(encodedCertificate),
+                configuration["Authentication:DataProtectionCertificatePassword"], OperatingSystem.IsMacOS() ? X509KeyStorageFlags.DefaultKeySet : X509KeyStorageFlags.EphemeralKeySet);
+            if (!certificate.HasPrivateKey) throw new InvalidOperationException("Session protection certificate requires its private key.");
+            protection.ProtectKeysWithCertificate(certificate);
+        }
+        else if (!string.IsNullOrWhiteSpace(keyPath)) protection.PersistKeysToFileSystem(new DirectoryInfo(keyPath));
         else if (!environment.IsDevelopment())
             throw new InvalidOperationException("Configure Authentication:DataProtectionKeysPath on durable protected storage for deployed sessions.");
 

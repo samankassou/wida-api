@@ -2,6 +2,8 @@
 
 This guide is for operators hosting their own Wida instance. The source is available under the [MIT License](../LICENSE); Google, Azure, and hosting services require your own configuration and may incur costs. The repository does not provision infrastructure or promise a hosted service.
 
+For the optional Render Free/Supabase deployment, use the [step-by-step configuration and secrets guide](render-free.md). Its sleep behavior and classic-queue guarantees differ from an always-running VPS.
+
 ## Choose what to expose
 
 The companion frontend offers `/demo` without authentication or backend calls. Its sample extraction results are fictional; new demo uploads use manual entry. A connected deployment requires the Next.js server proxy, ASP.NET Core API, PostgreSQL, and Google sign-in. Automatic extraction additionally requires Azure Document Intelligence and RabbitMQ, with at least one API instance running the embedded worker continuously.
@@ -31,7 +33,7 @@ Record the revisions, environment, date, and outcomes. Historical test counts in
 
 ## Operate and explain the service
 
-Monitor availability, API/worker errors, failed queue messages, disk capacity, and Azure consumption. There is no built-in health-check endpoint; arrange host/service monitoring appropriate to your infrastructure. Configure provider spending alerts and an operator procedure for pausing analysis. Disabling every worker pauses consumption, but does not disable admission: queued work may still be accepted.
+Monitor availability, API/worker errors, failed queue messages, disk capacity, and Azure consumption. `GET /healthz` is an anonymous HTTP liveness probe; it does not establish database, storage, Azure or broker availability. Arrange dependency and worker monitoring separately. Configure provider spending alerts and an operator procedure for pausing analysis. Disabling every worker pauses consumption, but does not disable admission: queued work may still be accepted.
 
 The public trial allows 4 lifetime analysis pages per ordinary account, 10 documents, and a shared 400-page monthly admission budget. Administrators bypass application quotas and can exceed that monthly budget; provider limits still apply. External calls using the same Azure resource are not included in Wida's ledger. See [budget and credit operations](public-beta.md).
 

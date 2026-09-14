@@ -1,4 +1,5 @@
 using System.ClientModel.Primitives;
+using Wida.Dal.Storage;
 using System.Globalization;
 using System.Text.Json;
 using Azure;
@@ -24,13 +25,15 @@ public class AzureDocumentAnalyzer : IDocumentAnalyzer
 
     private readonly IConfiguration _configuration;
     private DocumentIntelligenceClient? _client;
+    private readonly IDocumentStorage? _storage;
 
     public AzureDocumentAnalyzer(
         IConfiguration configuration,
-        DocumentIntelligenceClient? client = null)
+        DocumentIntelligenceClient? client = null, IDocumentStorage? storage = null)
     {
         _configuration = configuration;
         _client = client;
+        _storage = storage;
     }
 
     public async Task<DocumentAnalysisResult> AnalyzeInvoiceAsync(
@@ -42,12 +45,13 @@ public class AzureDocumentAnalyzer : IDocumentAnalyzer
         // Resolve Azure credentials only for OCR requests; manual processing and
         // reading stored results must remain available without Azure configuration.
         var client = _client ??= CreateClient();
-        var fileBytes = await File.ReadAllBytesAsync(filePath, cancellationToken);
+        await using var stream = _storage is null ? File.OpenRead(filePath) : await _storage.OpenReadAsync(filePath, cancellationToken);
+        var fileBytes = await BinaryData.FromStreamAsync(stream, cancellationToken);
 
         var operation = await client.AnalyzeDocumentAsync(
             WaitUntil.Completed,
             "prebuilt-invoice",
-            BinaryData.FromBytes(fileBytes),
+            fileBytes,
             cancellationToken);
 
         return MapResult(operation.Value);

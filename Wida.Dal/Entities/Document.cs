@@ -17,6 +17,8 @@ public class Document
 
     public string ContentType { get; set; } = string.Empty;
 
+    public long SizeBytes { get; set; }
+
     public string StoragePath { get; set; } = string.Empty;
 
     public ICollection<ProcessingRun> ProcessingRuns { get; set; } = [];

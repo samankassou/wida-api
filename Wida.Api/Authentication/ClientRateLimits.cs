@@ -1,4 +1,6 @@
 using System.Net;
+using System.Security.Cryptography;
+using System.Text;
 using System.Security.Claims;
 using System.Threading.RateLimiting;
 
@@ -29,23 +31,36 @@ public static class ClientRateLimits
 public sealed class TrustedClientIp
 {
     public const string Header = "X-Wida-Client-IP";
+    public const string SecretHeader = "X-Wida-Proxy-Secret";
+    private readonly byte[]? secretHash;
     private readonly HashSet<IPAddress> proxies;
 
     public TrustedClientIp(IConfiguration configuration, IWebHostEnvironment environment)
     {
         proxies = (configuration.GetSection("RateLimiting:TrustedProxies").Get<string[]>() ?? [])
             .Select(value => ClientRateLimits.Normalize(IPAddress.Parse(value))!).ToHashSet();
-        if (proxies.Count == 0 && !environment.IsDevelopment())
+        var secret = configuration["Authentication:ProxySecret"];
+        if (!string.IsNullOrEmpty(secret))
+        {
+            if (secret.Length < 32) throw new InvalidOperationException("Authentication:ProxySecret must contain at least 32 characters.");
+            secretHash = SHA256.HashData(Encoding.UTF8.GetBytes(secret));
+        }
+        if (secretHash is null && proxies.Count == 0 && !environment.IsDevelopment())
             throw new InvalidOperationException("Configure RateLimiting:TrustedProxies with the Next.js proxy connection IPs.");
     }
 
     public async Task InvokeAsync(HttpContext context, RequestDelegate next)
     {
-        if (proxies.Count != 0)
+        if (secretHash is not null || proxies.Count != 0)
         {
             var peer = ClientRateLimits.Normalize(context.Connection.RemoteIpAddress);
             var value = context.Request.Headers[Header].ToString();
-            if (peer is null || !proxies.Contains(peer))
+            var authenticatedProxy = secretHash is not null
+                ? CryptographicOperations.FixedTimeEquals(secretHash,
+                    SHA256.HashData(Encoding.UTF8.GetBytes(context.Request.Headers[SecretHeader].ToString())))
+                : peer is not null && proxies.Contains(peer);
+            context.Request.Headers.Remove(SecretHeader);
+            if (!authenticatedProxy)
             {
                 context.Response.StatusCode = StatusCodes.Status403Forbidden;
                 return;

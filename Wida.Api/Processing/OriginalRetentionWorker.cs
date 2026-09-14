@@ -1,11 +1,12 @@
 using Microsoft.EntityFrameworkCore;
 using Wida.Dal.Persistence;
 using Wida.Dal.Enums;
+using Wida.Dal.Storage;
 
 namespace Wida.Api.Processing;
 
 // Only originals expire: invoice records, credit counters and audit history survive.
-public sealed class OriginalRetentionWorker(IServiceScopeFactory scopes, IWebHostEnvironment environment,
+public sealed class OriginalRetentionWorker(IServiceScopeFactory scopes,
     ILogger<OriginalRetentionWorker> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken token)
@@ -24,14 +25,9 @@ public sealed class OriginalRetentionWorker(IServiceScopeFactory scopes, IWebHos
                     .Where(x => x.OwnerUser.Role != UserRole.Admin && x.UploadedAt <= cutoff && !db.ProcessingRuns.IgnoreQueryFilters().Any(r =>
                         r.DocumentId == x.Id && r.IsBackgroundJob && (r.Status == ProcessingStatus.Pending || r.Status == ProcessingStatus.Running)))
                     .Select(x => x.StoragePath).ToListAsync(token);
-                var uploads = Path.GetFullPath(Path.Combine(environment.ContentRootPath, "uploads"));
+                var storage = scope.ServiceProvider.GetRequiredService<IDocumentStorage>();
                 foreach (var path in originals)
-                {
-                    token.ThrowIfCancellationRequested();
-                    if (!Path.IsPathFullyQualified(path) || Path.GetDirectoryName(Path.GetFullPath(path)) != uploads) continue;
-                    var info = new FileInfo(path);
-                    if (info.Exists && info.LinkTarget is null) info.Delete();
-                }
+                    await storage.DeleteAsync(path, token);
                 await transaction.CommitAsync(token);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { break; }

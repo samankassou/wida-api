@@ -1,4 +1,5 @@
 using System.ClientModel.Primitives;
+using Wida.Dal.Storage;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
@@ -10,7 +11,7 @@ using Wida.Dal.Services.Interfaces;
 namespace Wida.Dal.Services;
 
 // One HTTP request per call: the durable worker owns retry and polling policy.
-public sealed class QueuedAzureDocumentAnalyzer(HttpClient http, IConfiguration configuration) : IQueuedDocumentAnalyzer
+public sealed class QueuedAzureDocumentAnalyzer(HttpClient http, IConfiguration configuration, IDocumentStorage? storage = null) : IQueuedDocumentAnalyzer
 {
     public TimeSpan? RetryAfter { get; private set; }
 
@@ -32,7 +33,7 @@ public sealed class QueuedAzureDocumentAnalyzer(HttpClient http, IConfiguration 
     public async Task<string> SubmitAsync(string filePath, CancellationToken cancellationToken)
     {
         using var request = Request(HttpMethod.Post, $"{ModelPath}:analyze?{ApiVersion}");
-        await using var file = File.OpenRead(filePath);
+        await using var file = storage is null ? File.OpenRead(filePath) : await storage.OpenReadAsync(filePath, cancellationToken);
         request.Content = new StreamContent(file);
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
         using var response = await http.SendAsync(request, cancellationToken);

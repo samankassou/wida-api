@@ -6,6 +6,7 @@ using Wida.Bll.Exceptions;
 using Wida.Bll.Services.Interfaces;
 using Wida.Api.Files;
 using Microsoft.Net.Http.Headers;
+using Wida.Dal.Storage;
 
 namespace Wida.Api.Controllers;
 
@@ -15,13 +16,15 @@ public class DocumentsController : ControllerBase
 {
     private readonly IDocumentService _documentService;
     private readonly IWebHostEnvironment _environment;
+    private readonly IDocumentStorage _storage;
 
     public DocumentsController(
         IDocumentService documentService,
-        IWebHostEnvironment environment)
+        IWebHostEnvironment environment, IDocumentStorage? storage = null)
     {
         _documentService = documentService;
         _environment = environment;
+        _storage = storage ?? new LocalDocumentStorage(Path.Combine(environment.ContentRootPath, "uploads"));
     }
 
     [HttpGet]
@@ -70,24 +73,13 @@ public class DocumentsController : ControllerBase
             return Problem(statusCode: 410, detail: "L’original a expiré après 30 jours. Les données de la facture restent disponibles.");
         var content = await _documentService.GetContentAsync(id, cancellationToken);
         if (content is null) return NotFound();
-        var uploadsPath = Path.GetFullPath(Path.Combine(_environment.ContentRootPath, "uploads"));
-        string physicalPath;
-        try { physicalPath = Path.GetFullPath(content.StoragePath); }
-        catch (ArgumentException) { return NotFound(); }
-        if (!Path.IsPathFullyQualified(content.StoragePath)
-            || !string.Equals(Path.GetDirectoryName(physicalPath), uploadsPath, StringComparison.Ordinal))
-            return NotFound();
-
         var name = DocumentFilePolicy.SafeName(content.OriginalFileName);
         var contentType = DocumentFilePolicy.ContentTypeFor(name);
         if (contentType is null) return NotFound();
-        FileStream stream;
+        Stream stream;
         try
         {
-            var info = new FileInfo(physicalPath);
-            if (!info.Exists || info.LinkTarget is not null) return NotFound();
-            stream = new FileStream(physicalPath, FileMode.Open, FileAccess.Read, FileShare.Read,
-                bufferSize: 4096, useAsync: true);
+            stream = await _storage.OpenReadAsync(content.StoragePath, cancellationToken);
         }
         catch (FileNotFoundException) { return NotFound(); }
         catch (DirectoryNotFoundException) { return NotFound(); }
@@ -149,6 +141,8 @@ public class DocumentsController : ControllerBase
             uploadsPath,
             storedFileName);
 
+        string? storedLocation = null;
+        bool commitAttempted = false;
         try
         {
             await using (var stream = System.IO.File.Create(physicalPath))
@@ -189,43 +183,44 @@ public class DocumentsController : ControllerBase
             var hash = Convert.ToHexString(SHA256.HashData(bytes));
             var duplicate = await db.Documents.SingleOrDefaultAsync(x => x.ContentHash == hash, cancellationToken);
             if (duplicate is not null && (User.IsInRole("Admin") || duplicate.UploadedAt > DateTime.UtcNow.AddDays(-30))
-                && System.IO.File.Exists(duplicate.StoragePath))
+                && await _storage.ExistsAsync(duplicate.StoragePath, cancellationToken))
             {
                 System.IO.File.Delete(physicalPath);
                 var existingResponse = await _documentService.GetByIdAsync(duplicate.Id, cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
                 return Ok(existingResponse);
             }
+            if (duplicate is null && !User.IsInRole("Admin") && await db.Documents.CountAsync(cancellationToken) >= 10)
+                throw new TrialLimitException("La bêta est limitée à 10 documents par compte.");
+            storedLocation = await _storage.PersistAsync(physicalPath, contentType, cancellationToken);
             if (duplicate is not null)
             {
-                // Restore only the original, retaining its invoice, history and credit ledger.
+                // Never delete the previous original before the metadata replacement commits.
                 var expiredPath = duplicate.StoragePath;
-                if (Path.IsPathFullyQualified(expiredPath)
-                    && Path.GetDirectoryName(Path.GetFullPath(expiredPath)) == Path.GetFullPath(uploadsPath))
-                {
-                    var expired = new FileInfo(expiredPath);
-                    if (expired.Exists && expired.LinkTarget is null) expired.Delete();
-                }
-                duplicate.StoragePath = physicalPath;
+                duplicate.StoragePath = storedLocation;
                 duplicate.UploadedAt = DateTime.UtcNow;
                 duplicate.PageCount = pages;
+                duplicate.SizeBytes = bytes.LongLength;
                 await db.SaveChangesAsync(cancellationToken);
                 var existingResponse = await _documentService.GetByIdAsync(duplicate.Id, cancellationToken);
+                commitAttempted = true;
                 await transaction.CommitAsync(cancellationToken);
+                try { await _storage.DeleteAsync(expiredPath, cancellationToken); }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                { HttpContext.RequestServices.GetService<ILogger<DocumentsController>>()?.LogWarning("Could not remove replaced original {DocumentId}.", duplicate.Id); }
                 return Ok(existingResponse);
             }
-            if (!User.IsInRole("Admin") && await db.Documents.CountAsync(cancellationToken) >= 10)
-                throw new TrialLimitException("La bêta est limitée à 10 documents par compte.");
             var document = await _documentService.CreateAsync(
                 fileName,
                 contentType,
-                physicalPath,
+                storedLocation,
                 cancellationToken);
 
             var stored = await db.Documents.SingleAsync(x => x.Id == document.Id, cancellationToken);
-            stored.PageCount = pages; stored.ContentHash = hash;
+            stored.PageCount = pages; stored.ContentHash = hash; stored.SizeBytes = bytes.LongLength;
             await db.SaveChangesAsync(cancellationToken);
             var response = await _documentService.GetByIdAsync(document.Id, cancellationToken);
+            commitAttempted = true;
             await transaction.CommitAsync(cancellationToken);
 
             return CreatedAtAction(
@@ -235,8 +230,23 @@ public class DocumentsController : ControllerBase
         }
         catch
         {
-            System.IO.File.Delete(physicalPath);
+            // A failed commit acknowledgement may still mean committed metadata. Keep the
+            // original in that case; reconcile orphans instead of deleting referenced data.
+            if (!commitAttempted)
+            {
+                if (storedLocation is not null)
+                {
+                    try { await _storage.DeleteAsync(storedLocation, CancellationToken.None); }
+                    catch { /* Preserve the original failure; orphan cleanup is an operator task. */ }
+                }
+                System.IO.File.Delete(physicalPath);
+            }
             throw;
+        }
+        finally
+        {
+            if (storedLocation is not null && storedLocation != physicalPath)
+                System.IO.File.Delete(physicalPath);
         }
     }
 

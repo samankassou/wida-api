@@ -50,7 +50,7 @@ public sealed class InvoiceQueue(WidaDbContext db, IAnalysisJobPublisher publish
         if (!isAdmin && user.AnalysisPagesGranted - user.AnalysisPagesUsed < document.PageCount)
             throw new TrialLimitException("Vos crédits sont insuffisants. Demandez plus de crédits ou utilisez la saisie manuelle.");
         if (isAdmin && !string.Equals(configuration?["AzureDocumentIntelligence:Tier"], "S0", StringComparison.OrdinalIgnoreCase)
-            && (document.PageCount > 2 || (File.Exists(document.StoragePath) && new FileInfo(document.StoragePath).Length > 4 * 1024 * 1024)))
+            && (document.PageCount > 2 || (document.SizeBytes > 4 * 1024 * 1024 || (File.Exists(document.StoragePath) && new FileInfo(document.StoragePath).Length > 4 * 1024 * 1024))))
             throw new TrialLimitException("Votre compte admin est sans quota Wida, mais Azure F0 ne traite que 2 pages et 4 Mio. Configurez Azure S0 pour analyser ce document ; la saisie manuelle reste disponible.", 400);
         await TrialBudget.ReserveMonthAsync(db, document.PageCount, cancellationToken, enforceLimit: !isAdmin);
         if (!isAdmin) user.AnalysisPagesUsed += document.PageCount;

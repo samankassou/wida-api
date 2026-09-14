@@ -2,3 +2,10 @@
 **/[Oo]bj/
 **/TestResults/
 *.trx
+.env
+.env.*
+!.env.example
+**/uploads/
+*.pfx
+*.pem
+*.key

@@ -31,7 +31,7 @@ public sealed class InvoiceQueueExecutor(WidaDbContext db, IQueuedDocumentAnalyz
             if (submitting)
             {
                 if (!string.Equals(configuration?["AzureDocumentIntelligence:Tier"], "S0", StringComparison.OrdinalIgnoreCase)
-                    && (run.Document.PageCount > 2 || (File.Exists(run.Document.StoragePath) && new FileInfo(run.Document.StoragePath).Length > 4 * 1024 * 1024)))
+                    && (run.Document.PageCount > 2 || (run.Document.SizeBytes > 4 * 1024 * 1024 || (File.Exists(run.Document.StoragePath) && new FileInfo(run.Document.StoragePath).Length > 4 * 1024 * 1024))))
                 {
                     Fail(run, "AZURE_F0_LIMIT", "Azure F0 accepte 2 pages et 4 Mio maximum. Configurez une ressource S0 pour ce document.");
                     await db.SaveChangesAsync(cancellationToken);

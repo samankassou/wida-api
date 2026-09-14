@@ -26,25 +26,36 @@ public sealed class RabbitMqTransport(IConfiguration configuration) : IAnalysisJ
         return await factory.CreateConnectionAsync(token);
     }
 
+    public string QueueType => configuration["RabbitMQ:QueueType"] ?? "quorum";
+
+    public Dictionary<string, object?> QueueArguments(bool failed = false)
+    {
+        if (QueueType is not ("quorum" or "classic"))
+            throw new InvalidOperationException("RabbitMQ:QueueType must be quorum or classic.");
+        var args = new Dictionary<string, object?> { ["x-queue-type"] = QueueType };
+        if (failed) return args;
+        args["x-single-active-consumer"] = true;
+        args["x-dead-letter-exchange"] = "";
+        args["x-dead-letter-routing-key"] = DeadLetterQueue;
+        args["x-overflow"] = "reject-publish";
+        args["x-max-length"] = 1000;
+        args["x-consumer-timeout"] = 86400000;
+        if (QueueType == "quorum")
+        {
+            args["x-dead-letter-strategy"] = "at-least-once";
+            args["x-delivery-limit"] = -1;
+        }
+        // Classic queues support small shared brokers, but dead lettering is best effort.
+        // Terminal results remain in PostgreSQL. Never silently downgrade an existing queue.
+        return args;
+    }
+
     public async Task DeclareAsync(IChannel channel, CancellationToken token)
     {
         await channel.QueueDeclareAsync(DeadLetterQueue, durable: true, exclusive: false, autoDelete: false,
-            arguments: new Dictionary<string, object?> { ["x-queue-type"] = "quorum" }, cancellationToken: token);
+            arguments: QueueArguments(failed: true), cancellationToken: token);
         await channel.QueueDeclareAsync(QueueName, durable: true, exclusive: false, autoDelete: false,
-            arguments: new Dictionary<string, object?>
-            {
-                ["x-queue-type"] = "quorum",
-                ["x-single-active-consumer"] = true,
-                ["x-dead-letter-exchange"] = "",
-                ["x-dead-letter-routing-key"] = DeadLetterQueue,
-                ["x-dead-letter-strategy"] = "at-least-once",
-                ["x-overflow"] = "reject-publish",
-                ["x-max-length"] = 1000,
-                // Database outages must not silently exhaust Rabbit's default delivery limit.
-                // Azure failures have a separate bounded retry policy and end in the DLQ.
-                ["x-delivery-limit"] = -1,
-                ["x-consumer-timeout"] = 86400000
-            }, cancellationToken: token);
+            arguments: QueueArguments(), cancellationToken: token);
     }
 
     public async Task PublishAsync(Guid runId, CancellationToken cancellationToken = default)

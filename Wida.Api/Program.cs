@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using Wida.Dal.Storage;
+using Wida.Dal.Persistence;
 using Microsoft.AspNetCore.RateLimiting;
 using System.Text.Json.Serialization;
 using Scalar.AspNetCore;
@@ -7,6 +9,18 @@ using Wida.Bll;
 using Wida.Api.Authentication;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Explicit broker preflight: validates TLS, permissions and queue declarations without Azure calls.
+if (builder.Configuration.GetValue("check-broker", false))
+{
+    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+    var broker = new Wida.Api.Processing.RabbitMqTransport(builder.Configuration);
+    await using var connection = await broker.ConnectAsync(timeout.Token);
+    await using var channel = await connection.CreateChannelAsync(cancellationToken: timeout.Token);
+    await broker.DeclareAsync(channel, timeout.Token);
+    Console.WriteLine("Broker connection and queue declarations succeeded.");
+    return;
+}
 
 // Explicit operator recovery after restoring broker data.
 // Re-publish a known ID only; this never scans PostgreSQL or creates a second run.
@@ -25,6 +39,16 @@ if (string.IsNullOrWhiteSpace(connectionString))
     throw new InvalidOperationException(
         "Configure ConnectionStrings:DefaultConnection using user secrets or ConnectionStrings__DefaultConnection.");
 }
+
+var storageProvider = builder.Configuration["Storage:Provider"] ?? "Local";
+if (storageProvider == "Supabase")
+{
+    builder.Services.AddHttpClient<IDocumentStorage, SupabaseDocumentStorage>(client => client.Timeout = TimeSpan.FromSeconds(60))
+        .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+}
+else if (storageProvider == "Local")
+    builder.Services.AddSingleton<IDocumentStorage>(new LocalDocumentStorage(Path.Combine(builder.Environment.ContentRootPath, "uploads")));
+else throw new InvalidOperationException("Storage:Provider must be Local or Supabase.");
 
 builder.Services.AddWidaAuthentication(builder.Configuration, builder.Environment);
 builder.Services.AddControllers(options => options.Filters.Add<ValidateSessionAntiforgeryFilter>())
@@ -105,6 +129,17 @@ if (builder.Configuration.GetValue("list-credit-requests", false))
     return;
 }
 
+// Container startup can apply migrations before starting either hosted worker.
+// Intended for a single Render instance. Use the same reviewed image for schema and app.
+if (builder.Configuration.GetValue("Database:ApplyMigrations", false))
+{
+    using var scope = app.Services.CreateScope();
+    await scope.ServiceProvider.GetRequiredService<WidaDbContext>().Database.MigrateAsync();
+}
+// Validate remote storage configuration before marking the service ready.
+using (var scope = app.Services.CreateScope())
+    _ = scope.ServiceProvider.GetRequiredService<IDocumentStorage>();
+
 var trustedClientIp = new TrustedClientIp(builder.Configuration, builder.Environment);
 
 // Configure the HTTP request pipeline.
@@ -132,6 +167,13 @@ app.Use(async (context, next) =>
         context.Response.StatusCode = ex.Status;
         await context.Response.WriteAsJsonAsync(new { title = "Limite de la bêta", detail = ex.Message });
     }
+});
+// Health probes carry no credentials and expose no account or dependency details.
+app.Use(async (context, next) =>
+{
+    if (context.Request.Path == "/healthz" && HttpMethods.IsGet(context.Request.Method))
+    { context.Response.StatusCode = 200; await context.Response.WriteAsync("ok"); return; }
+    await next(context);
 });
 app.Use(trustedClientIp.InvokeAsync);
 app.UseAuthentication();

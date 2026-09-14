@@ -86,6 +86,27 @@ public sealed class ClientRateLimitsTests
         Assert.Equal(IPAddress.Parse("192.0.2.9"), context.Connection.RemoteIpAddress);
     }
 
+    [Fact]
+    public async Task Public_API_requires_server_secret_even_when_peer_IP_is_allowlisted()
+    {
+        var secret = new string('s', 48);
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        { ["Authentication:ProxySecret"] = secret, ["RateLimiting:TrustedProxies:0"] = "10.0.0.1" }).Build();
+        var middleware = new TrustedClientIp(config, new Environment());
+        foreach (var candidate in new[] { "", "wrong", secret })
+        {
+            var context = Context("10.0.0.1");
+            context.Request.Headers[TrustedClientIp.Header] = "192.0.2.1";
+            context.Request.Headers[TrustedClientIp.SecretHeader] = candidate;
+            var called = false;
+            await middleware.InvokeAsync(context, _ => { called = true; return Task.CompletedTask; });
+            Assert.Equal(candidate == secret, called);
+            Assert.False(context.Request.Headers.ContainsKey(TrustedClientIp.SecretHeader));
+            if (called) Assert.Equal(IPAddress.Parse("192.0.2.1"), context.Connection.RemoteIpAddress);
+            else Assert.Equal(403, context.Response.StatusCode);
+        }
+    }
+
     private static IConfiguration Config(string? proxy = null) => new ConfigurationBuilder()
         .AddInMemoryCollection(proxy is null ? [] : new Dictionary<string, string?> { ["RateLimiting:TrustedProxies:0"] = proxy }).Build();
 

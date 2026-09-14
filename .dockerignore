@@ -1,0 +1,10 @@
+**/bin
+**/obj
+**/TestResults
+.git
+.env*
+**/appsettings.Development.json
+**/uploads
+**/*.pfx
+**/*.pem
+**/*.key

@@ -2,6 +2,8 @@
 
 RabbitMQ distributes analysis work. A .NET `BackgroundService` consumes messages; PostgreSQL stores processing history, ownership, results and the Azure operation ID. There is no database queue scan, database worker election, or database outbox dispatcher.
 
+The [Render Free profile](render-free.md) keeps this same worker inside the API container, with external originals and session keys. It optionally uses `RabbitMQ__QueueType=classic` for a shared broker; the quorum-specific guarantees below apply to the default `quorum` mode.
+
 ## Local development
 
 Use a RabbitMQ service with quorum queues, publisher confirms, single active consumer, and dead lettering. From `Wida.Api`, configure your own broker credentials:

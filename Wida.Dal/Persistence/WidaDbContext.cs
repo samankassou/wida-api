@@ -1,13 +1,16 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.DataProtection.EntityFrameworkCore;
 using Wida.Dal.Entities;
 using Wida.Dal.Enums;
 using Wida.Dal.Services.Interfaces;
 
 namespace Wida.Dal.Persistence;
 
-public class WidaDbContext(DbContextOptions<WidaDbContext> options, ICurrentUser currentUser) : DbContext(options)
+public class WidaDbContext(DbContextOptions<WidaDbContext> options, ICurrentUser currentUser) : DbContext(options), IDataProtectionKeyContext
 {
     private Guid? CurrentUserId => currentUser.UserId;
+
+    public DbSet<DataProtectionKey> DataProtectionKeys => Set<DataProtectionKey>();
 
     public DbSet<AnalysisBudget> AnalysisBudgets => Set<AnalysisBudget>();
 

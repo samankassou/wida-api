@@ -1,6 +1,6 @@
 # Wida API
 
-Wida is an open-source ASP.NET Core API for uploading documents, recording invoices and line items, and tracking invoice analysis with Azure Document Intelligence. It targets .NET 10, stores application data in PostgreSQL through Entity Framework Core, and saves uploaded files on the API filesystem.
+Wida is an open-source ASP.NET Core API for uploading documents, recording invoices and line items, and tracking invoice analysis with Azure Document Intelligence. It targets .NET 10, stores application data in PostgreSQL through Entity Framework Core, and stores uploaded originals either locally or in private Supabase Storage.
 
 ## Documentation
 
@@ -45,6 +45,8 @@ dotnet test Wida.slnx
 On 10 September 2026, all **81 API tests** passed for commit `2e4011e`. Processing/concurrency tests use SQLite transactions so failed saves roll back before retry. Authentication HTTP tests use simulated Google responses with real cookie/antiforgery middleware, while other service fixtures use EF InMemory. No live Google, PostgreSQL, or Azure end-to-end result is implied by these tests.
 
 ## Contributing and deployment
+
+For the single-container free beta (API + embedded worker on Render, Supabase persistence and hosted RabbitMQ), follow the [Render setup and secrets guide](docs/render-free.md). The repository includes a Dockerfile, Render Blueprint and production environment example.
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) for issue reports, development checks, and pull requests. Use the [deployment checklist](docs/deployment.md) before opening a hosted instance to users.
 

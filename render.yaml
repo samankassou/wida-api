@@ -1,0 +1,56 @@
+services:
+  - type: web
+    name: wida-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+    envVars:
+      - key: ASPNETCORE_ENVIRONMENT
+        value: Production
+      - key: ASPNETCORE_HTTP_PORTS
+        value: '10000'
+      - key: Storage__Provider
+        value: Supabase
+      - key: Storage__Supabase__Bucket
+        value: wida-originals
+      - key: Storage__Supabase__Url
+        sync: false
+      - key: Storage__Supabase__ServiceKey
+        sync: false
+      - key: ConnectionStrings__DefaultConnection
+        sync: false
+      - key: Database__ApplyMigrations
+        value: 'true'
+      - key: Authentication__DataProtectionProvider
+        value: Database
+      - key: Authentication__DataProtectionCertificateBase64
+        sync: false
+      - key: Authentication__DataProtectionCertificatePassword
+        sync: false
+      - key: Authentication__ProxySecret
+        sync: false
+      - key: Authentication__PublicOrigin
+        sync: false
+      - key: Authentication__Google__ClientId
+        sync: false
+      - key: Authentication__Google__ClientSecret
+        sync: false
+      - key: Authentication__AdminEmail
+        sync: false
+      - key: Authentication__PublicBeta
+        value: 'true'
+      - key: ProcessingQueue__Enabled
+        value: 'true'
+      - key: RabbitMQ__Uri
+        sync: false
+      - key: RabbitMQ__QueueType
+        value: classic
+      - key: RabbitMQ__QueueName
+        value: wida.invoice-analysis.free.v1
+      - key: AzureDocumentIntelligence__Tier
+        value: F0
+      - key: AzureDocumentIntelligence__Endpoint
+        sync: false
+      - key: AzureDocumentIntelligence__Key
+        sync: false

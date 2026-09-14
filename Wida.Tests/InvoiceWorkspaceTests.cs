@@ -50,7 +50,8 @@ public class InvoiceWorkspaceTests
         Assert.Collection(context.Database.GetMigrations(),
             migration => Assert.EndsWith("_InitialCreate", migration),
             migration => Assert.EndsWith("_PublicTrial", migration),
-            migration => Assert.EndsWith("_UserRoles", migration));
+            migration => Assert.EndsWith("_UserRoles", migration),
+            migration => Assert.EndsWith("_RemoteStorageAndSessionKeys", migration));
         Assert.False(context.Model.FindEntityType(typeof(Document))!.FindProperty(nameof(Document.OwnerUserId))!.IsNullable);
     }
 
