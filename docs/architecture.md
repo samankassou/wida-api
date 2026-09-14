@@ -8,9 +8,9 @@ The solution contains three application projects and an automated test project, 
 
 | Project | Responsibility | Main entry points |
 | --- | --- | --- |
-| `Wida.Api` | HTTP routing, upload file storage, JSON serialization, configuration, and OpenAPI/Scalar. | [Program.cs](../Wida.Api/Program.cs), [controllers](../Wida.Api/Controllers) |
+| `Wida.Api` | HTTP routing, upload validation, storage selection, JSON serialization, configuration, and OpenAPI/Scalar. | [Program.cs](../Wida.Api/Program.cs), [controllers](../Wida.Api/Controllers) |
 | `Wida.Bll` | Document, invoice, and processing workflows; DTO mapping; invoice validation. | [services](../Wida.Bll/Services), [DTOs](../Wida.Bll/Dtos), [InvoiceValidator](../Wida.Bll/Validators/InvoiceValidator.cs) |
-| `Wida.Dal` | EF Core entities, PostgreSQL mappings and migrations, repositories, analysis contracts/models, and the Azure analyzer. | [WidaDbContext](../Wida.Dal/Persistence/WidaDbContext.cs), [repositories](../Wida.Dal/Repositories), [AzureDocumentAnalyzer](../Wida.Dal/Services/AzureDocumentAnalyzer.cs) |
+| `Wida.Dal` | EF Core entities, PostgreSQL mappings and migrations, repositories, analysis contracts/models, local/Supabase storage adapters, Data Protection key persistence, and the Azure analyzers. | [WidaDbContext](../Wida.Dal/Persistence/WidaDbContext.cs), [repositories](../Wida.Dal/Repositories), [AzureDocumentAnalyzer](../Wida.Dal/Services/AzureDocumentAnalyzer.cs) |
 | `Wida.Tests` | Automated workflow and extraction regression tests using Azure response fixtures, SQLite transaction tests, and EF InMemory fixtures. | [tests](../Wida.Tests) |
 
 Declared project references are `Wida.Api → Wida.Bll`, `Wida.Api → Wida.Dal`, and `Wida.Bll → Wida.Dal`. Startup calls `AddDal(configuration)` and `AddBll()` to register the database context, repositories, analyzer, and services with scoped lifetimes.
@@ -21,9 +21,9 @@ Declared project references are `Wida.Api → Wida.Bll`, `Wida.Api → Wida.Dal`
 
 ### Document upload
 
-`DocumentsController` writes the multipart `file` to `<content-root>/uploads/<generated-guid><original-extension>`. `DocumentService` creates metadata with document type `Unknown` and status `Uploaded`; `DocumentRepository` saves it to PostgreSQL. The response excludes the physical path and file bytes.
+`DocumentsController` validates a temporary upload under `<content-root>/uploads`: format, page count, size and owner-scoped content hash. `IDocumentStorage` then persists it locally or in a private Supabase bucket. PostgreSQL stores the location, byte size and owner; public responses exclude storage paths and file bytes. Reimporting the same content reuses the owner's document and restores an expired or missing original.
 
-The controller persists the exact absolute path of the written file. If copying the upload or saving its metadata fails, it attempts to delete the file before propagating the failure. Filesystem and database writes still do not share a transaction, so process termination or failed cleanup can leave an orphan file.
+Local storage retains an absolute path within the upload directory. Supabase stores an opaque `supabase:<object-key>` reference and removes the local temporary file. A failure before a database commit attempts storage cleanup; an uncertain commit preserves the object to avoid deleting a potentially referenced original. Storage and PostgreSQL do not share a transaction: operators must reconcile orphan objects after ambiguous failures.
 
 ### Workspace and invoice persistence
 
@@ -41,7 +41,7 @@ Document status is an optimistic concurrency token. If invoice saving overlaps a
 
 ### Processing
 
-The manual endpoint only inserts a `Pending` run with processor `Manual` and version `v1`. It does not queue work or transition that run later.
+The manual endpoint creates or reuses a `Pending` run with processor `Manual` and version `v1`. It does not queue work or transition that run later.
 
 The invoice-analysis endpoint uses `InvoiceQueue` to persist a job and return 202 immediately. `InvoiceQueueWorker` uses RabbitMQ single-active-consumer delivery with manual acknowledgements. `InvoiceQueueExecutor` performs durable submission/polling steps through `IQueuedDocumentAnalyzer`, preserving operation IDs and avoiding automatic resubmission after uncertain failures. All job writes use an owner-bound context. [Queue details](processing-queue.md) cover capacity, recovery, retry limits and deployment. Completed results use the existing invoice header/line mapping and explicit extracted-field inserts; saved invoice status takes precedence.
 
@@ -60,28 +60,31 @@ erDiagram
     ProcessingRuns ||--o{ ExtractedFields : records
 ```
 
-All entity primary keys are application-generated GUIDs. Document, invoice, and processing timestamps are initialized in UTC; invoice and due dates use `DateOnly`. Document-to-invoice/run and invoice/run-to-child relationships use cascade deletion. The required user-owner relationship uses restricted deletion. The API has no deletion endpoints.
+Domain entity primary keys are application-generated GUIDs; Data Protection key records use integer IDs. Document, invoice, and processing timestamps are initialized in UTC; invoice and due dates use `DateOnly`. Document-to-invoice/run and invoice/run-to-child relationships use cascade deletion. The required user-owner relationship uses restricted deletion. The API has no deletion endpoints.
 
 | Entity | Stored data |
 | --- | --- |
 | `AppUser` | Google subject, email, display name, role, granted/used analysis pages, pending credit request, and creation timestamp. |
 | `AnalysisBudget` | UTC month identifier and reserved page count shared across accounts. |
-| `Document` | Required owner user ID, page count, content hash, original filename, content type, storage path, document type/status, upload and audit timestamps. |
+| `Document` | Required owner user ID, page count, byte size, content hash, original filename, content type, storage path, document type/status, upload and audit timestamps. |
 | `Invoice` | Supplier and invoice details, dates, currency, amounts, audit timestamps, and document ID. |
 | `InvoiceLine` | Position, description, quantity, unit, pricing/tax values, and invoice ID. |
 | `ProcessingRun` | Processor/version, status, timestamps, error details, raw result, and document ID. |
+| `DataProtectionKey` | Encrypted session-key XML when the Database provider is selected. |
 | `ExtractedField` | Name, raw/normalized values, confidence, source, review flag, optional page/bounding data, and processing run ID. |
 
 EF configurations are discovered through `ApplyConfigurationsFromAssembly`. Amounts and quantities use precision `(18, 4)`, line tax rates `(8, 4)`, and extraction confidence `(5, 4)`. `RawResult`, `NormalizedValue`, and `BoundingBox` use PostgreSQL `jsonb`. Normalized values retain their JSON types: strings and date strings, numbers, or currency objects. Processing DTOs expose normalized values and bounding data as JSON values rather than strings containing JSON. When Azure supplies bounding regions, the analyzer stores the first region's page number and polygon.
 
-Migrations are committed in [Wida.Dal/Migrations](../Wida.Dal/Migrations) and applied explicitly with the commands in the [setup guide](../Wida.Api/README.md#database-migrations). Startup does not migrate or seed the database.
+Migrations are committed in [Wida.Dal/Migrations](../Wida.Dal/Migrations) and applied using the [setup guide](../Wida.Api/README.md#database-migrations). `Database:ApplyMigrations=true` applies them at startup before hosted workers; it is enabled in the single-instance Render profile. Otherwise, apply them explicitly. Startup does not seed application records.
 
 ## Runtime configuration and storage
 
 `Program.cs` requires `ConnectionStrings:DefaultConnection` before building the app. User Secrets support local Development configuration; deployment settings can use environment variables. The analyzer uses an endpoint and API key through `AzureKeyCredential`.
 
-Uploaded files must remain accessible at their recorded filesystem paths. Preserve the upload directory together with the database; moving the content root or running instances with separate filesystems requires accounting for these paths. The original-content endpoint only serves verified PDF/image signatures from absolute regular-file paths directly within the current upload directory, rejects symlink files, and supplies inline/attachment headers plus range support. It never serializes storage paths. Extracted fields are available in processing responses; raw analysis has no public retrieval endpoint.
+`Storage:Provider` selects `Local` (default) or `Supabase`. All workers need access to the same storage locations. Local storage validates regular files within the upload directory and rejects symlinks. Supabase uses server credentials and downloads originals to temporary seekable streams for range serving. The content endpoint checks ownership, retention and file signatures, then serves inline/attachment bytes without revealing storage locations. The retention worker deletes expired originals through the same storage interface.
 
-OpenAPI and Scalar routes are mapped only in Development. Startup configures Google OpenID Connect, Wida cookie sessions, a default authenticated-user policy, and antiforgery validation for controller mutations. The frontend is the public HTTPS origin; the private API uses the configured public scheme instead of redirecting proxy requests. There is no CORS policy, global exception handler or health-check endpoint. See [authentication](authentication.md) for the pilot allowlist and deployment.
+OpenAPI and Scalar are mapped only in Development and require authentication. `/healthz` is an anonymous liveness endpoint; it does not test dependencies. Google OIDC, Wida cookie sessions, ownership and antiforgery protect data access. The Next.js proxy is trusted either through fixed peer IPs on a private network or a shared secret over HTTPS. No browser CORS policy is needed. See [authentication](authentication.md) and [deployment](deployment.md).
+
+Production session keys use either a protected persistent directory or the Database provider with a stable PFX certificate. The Render profile stores encrypted keys in PostgreSQL, so container replacement preserves sessions. The API and both background workers share the same process; when the free service sleeps, analysis and physical retention cleanup pause.
 
 `Users` stores the stable Google subject and local identity. `Documents.OwnerUserId` is stamped at persistence time. Global query filters scope all five document-related entities to `ICurrentUser.UserId`, and save guards also reject foreign-parent writes and ownership changes. Ownership is a required foreign key; documents cannot be stored without an owner.

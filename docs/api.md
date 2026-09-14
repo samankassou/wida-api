@@ -6,6 +6,10 @@ This reference describes the controllers, DTOs, and services in the current work
 
 All document, invoice, processing and original-file endpoints require a Wida session; anonymous requests return `401`. POST/PUT requests also require the user-bound `X-CSRF-TOKEN` and antiforgery cookie. Queries and writes are restricted to the current user. See [Google sign-in](authentication.md) for the session endpoints and setup. The curl examples below show request payloads; add your session cookie and CSRF token when calling protected endpoints.
 
+## Health
+
+`GET /healthz` returns `200 ok` without authentication or a proxy secret. This tests HTTP process liveness, not database, storage, RabbitMQ or Azure availability.
+
 ## Conventions
 
 - The local HTTP launch profile uses `http://localhost:5085` behind the frontend proxy at `http://localhost:3000`. The HTTPS launch profile remains available at `https://localhost:7127`; the private API does not redirect HTTP requests.
@@ -13,7 +17,7 @@ All document, invoice, processing and original-file endpoints require a Wida ses
 - IDs are GUID strings. All ID route segments have a `:guid` constraint; malformed IDs do not match these routes.
 - Invoice dates use `YYYY-MM-DD`. Server timestamps are generated in UTC and serialized as ISO 8601 timestamps.
 - Successful resource creation returns `201 Created`; analysis admission returns `202 Accepted`. Both include a response body and a `Location` header.
-- Collection endpoints return JSON arrays, including `[]` when empty. They do not support pagination or filtering.
+- Collection endpoints return JSON arrays, including `[]` when empty. Most document/invoice lists have no pagination or filtering; the workspace supports a bounded limit and the admin user list supports search/page parameters.
 - Authentication is required for data routes. Every record is scoped to its document owner; see [session setup](authentication.md).
 - In Development, interactive documentation is available at `/scalar/v1`, and OpenAPI JSON is available at `/openapi/v1.json`.
 
@@ -41,7 +45,7 @@ All document, invoice, processing and original-file endpoints require a Wida ses
 - `GET /api/documents/workspace?limit=100` returns an array of `{ "document": DocumentResponse, "invoice": InvoiceResponse|null, "latestRun": ProcessingRunResponse|null }`. The default limit is 100; supported limits are 1–500. Documents are ordered by upload time descending, with ID as a stable tie-breaker. The latest run is selected by start time, then ID descending. An empty workspace is `[]`.
 - The workspace loads invoices, their lines, and only the latest run with its extracted fields through a bounded EF split query. It does not query each document separately. Filtering/search/paging beyond the latest loaded documents is not implemented.
 - `GET /api/documents/{id}/content` streams original bytes with the canonical PDF/image content type, inline Content-Disposition, byte-range support, `X-Content-Type-Options: nosniff`, and `Cache-Control: private, no-store`. Add `?download=true` for attachment disposition. Filenames are header-encoded; storage paths are never returned. Browser support for TIFF previews varies; download is available.
-- Retrieval returns `404` for missing metadata/files, unsupported or invalid file signatures, symlink files, and paths outside the current upload directory.
+- Retrieval returns `404` for missing metadata/objects or invalid signatures. Local storage also rejects symlinks and paths outside the upload directory. Expired ordinary-user originals return `410`. Storage outages are errors, not missing-object responses.
 - `GET /api/invoices` returns all saved invoices with lines, newest creation first. `PUT /api/invoices/{id}` updates a saved invoice as described below.
 
 The individual document, invoice, and processing-run reads return `404` when no matching record exists. Both processing creation endpoints also return `404` for a missing document. Listing processing runs does not check whether the document exists: a missing document also returns `200` with `[]`. There are no delete, approval, or export endpoints.
@@ -57,9 +61,9 @@ curl --fail-with-body https://localhost:7127/api/documents \
   -F 'file=@/absolute/path/invoice.pdf;type=application/pdf'
 ```
 
-Uploads accept PDF (`.pdf`), PNG (`.png`), JPEG (`.jpg`, `.jpeg`), and TIFF (`.tif`, `.tiff`) files up to 4 MiB (4 × 1024 × 1024 bytes). Empty, unsupported, mismatched, and disguised files return structured `400` errors under `errors.file`. Oversized files return `413`. Extension, reported MIME type, and format signature are checked; empty or `application/octet-stream` MIME values are accepted when extension and signature agree. This is format identification, not complete document decoding. The application allows 5 MiB of multipart request data to leave room for multipart overhead; host/proxy limits may reject large requests earlier. The stored content type is canonical for the verified format. Original filenames are reduced to a basename and must have at most 255 characters.
+Uploads accept PDF (`.pdf`), PNG (`.png`), JPEG (`.jpg`, `.jpeg`), and TIFF (`.tif`, `.tiff`) files up to 4 MiB (4 × 1024 × 1024 bytes). Empty, unsupported, mismatched, and disguised files return structured `400` errors under `errors.file`. Oversized files return `413`. Extension, reported MIME type, and format signature are checked; empty or `application/octet-stream` MIME values are accepted when extension and signature agree. Signature checks are followed by page inspection; unreadable or protected documents are rejected. This is not malware scanning. For ordinary users, the application allows 5 MiB of multipart request data to leave room for multipart overhead; host/proxy limits may reject large requests earlier. The stored content type is canonical for the verified format. Original filenames are reduced to a basename and must have at most 255 characters.
 
-Files are written to `<content-root>/uploads` under a generated GUID filename with the original extension. The exact absolute file path is saved in document metadata. If copying the file or saving metadata fails, the controller attempts to remove the uploaded file before propagating the error. The document response contains metadata only:
+Uploads are validated in a temporary local file, then persisted through `Storage:Provider=Local` or `Supabase`. Metadata records an absolute local path or opaque remote key and the byte size. Uncertain database commits preserve the stored original for operator reconciliation. Reimporting matching content reuses the owner's existing document (`200`); a new document returns `201`. The document response contains metadata only:
 
 ```json
 {

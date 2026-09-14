@@ -6,15 +6,19 @@ Wida is an open-source ASP.NET Core API for uploading documents, recording invoi
 
 | Guide | Contents |
 | --- | --- |
-| [Setup and development](Wida.Api/README.md) | Prerequisites, local configuration, running the API, migrations, example workflow, and troubleshooting. |
+| [Setup and development](Wida.Api/README.md) | Prerequisites, local configuration, running the API, migrations, and verification. |
 | [API reference](docs/api.md) | Routes, request and response fields, validation, status values, and processing behavior. |
 | [Google sign-in](docs/authentication.md) | OAuth setup, invited users, session protection and document ownership. |
 | [Architecture](docs/architecture.md) | Project responsibilities, dependencies, data relationships, and persistence. |
+| [Deployment](docs/deployment.md) | Hosting checklist and operational verification. |
+| [Render + Vercel](docs/render-free.md) | Docker, Supabase, hosted RabbitMQ, environment variables and troubleshooting. |
+| [Public beta](docs/public-beta.md) | Credits, roles, retention and client-IP trust. |
+| [Processing queue](docs/processing-queue.md) | Broker configuration, admission and recovery. |
 | [HTTP requests](Wida.Api/wida-api.http) | Requests to run individually in an editor with `.http` support after setup. |
 
 ## Capabilities
 
-- Upload PDF/PNG/JPEG/TIFF files up to 4 MiB, retrieve metadata, and preview/download originals with byte-range support.
+- Upload PDF/PNG/JPEG/TIFF files (ordinary users: 4 MiB and two pages), retrieve metadata, and preview/download originals with byte-range support.
 - Load a bounded document workspace with saved invoices and latest extraction runs.
 - Create, update, list, and retrieve one invoice per document, with optional line items and field-specific validation errors.
 - Record a manual processing run or request Azure's `prebuilt-invoice` analysis.
@@ -39,10 +43,6 @@ dotnet test Wida.slnx
 ```
 
 `Wida.Tests` exercises the analysis workflow with Azure response fixtures, SQLite for transactional processing/concurrency tests, and EF InMemory for the remaining service fixtures. The [build check](Wida.Api/README.md#build-check) also describes verification against your own PostgreSQL database and Azure resource.
-
-## Historical verification baseline
-
-On 10 September 2026, all **81 API tests** passed for commit `2e4011e`. Processing/concurrency tests use SQLite transactions so failed saves roll back before retry. Authentication HTTP tests use simulated Google responses with real cookie/antiforgery middleware, while other service fixtures use EF InMemory. No live Google, PostgreSQL, or Azure end-to-end result is implied by these tests.
 
 ## Contributing and deployment
 

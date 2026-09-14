@@ -1,6 +1,8 @@
 # Authentication note: data requests require Wida session/antiforgery cookies.
 # Mutations also require X-CSRF-TOKEN from GET /api/auth/session.
-# Use the signed-in frontend for the interactive flow; see docs/authentication.md.
+# Use the signed-in frontend for the interactive flow; see ../docs/authentication.md.
+# Direct production API calls also need trusted proxy credentials and a verified client IP.
+# These examples omit credentials; configure them privately in your HTTP client.
 # Run requests individually after following README.md.
 # Replace the IDs with values returned by your own requests.
 # The all-zero GUIDs below are placeholders, not seeded records.
@@ -70,9 +72,10 @@ POST {{wida_api_HostAddress}}/api/processing/documents/{{documentId}}
 Accept: application/json
 
 ### Analyze an invoice with Azure Document Intelligence
-# Sends the stored document to Azure and waits for analysis during the request.
-# Creates a new run. Inspect status even on HTTP 201: it can be Failed.
-# Requires Azure endpoint/key. Results include extractedFields and review flags.
+# Returns HTTP 202 after durable queue admission; it does not wait for Azure.
+# Reuses active work or completed results unless paid reanalysis is explicitly requested.
+# Requires RabbitMQ plus the embedded worker and Azure endpoint/key.
+# Poll the returned run until Completed or Failed; results include extractedFields.
 POST {{wida_api_HostAddress}}/api/processing/documents/{{documentId}}/invoice
 Accept: application/json
 

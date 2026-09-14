@@ -8,7 +8,19 @@ Il s’agit d’une configuration pour une petite bêta, pas d’une garantie de
 
 ### Supabase Free
 
-Créer un projet et conserver son mot de passe PostgreSQL. Copier sa connexion **Session pooler**, port 5432, compatible IPv4. Convertir les champs en chaîne Npgsql, comme dans [`.env.example`](../.env.example). Utiliser TLS avec validation du certificat (`SSL Mode=VerifyFull`), jamais `Trust Server Certificate=true`. Si le fournisseur exige une autorité supplémentaire, monter son certificat et configurer `Root Certificate` dans la chaîne.
+Créer un projet et conserver son mot de passe PostgreSQL. Dans **Connect → Session pooler**, copier **l’hôte et l’utilisateur exacts**, avec le port 5432. L’hôte ressemble à `aws-INDEX-REGION.pooler.supabase.com` et l’utilisateur à `postgres.REFERENCE_PROJET`. La connexion directe `db.…supabase.co` peut résoudre vers une adresse IPv6 inaccessible depuis le conteneur.
+
+Télécharger le certificat CA de la base depuis Supabase. Dans Render **Environment → Secret Files**, créer `supabase-ca.crt` et coller son contenu PEM complet. Le fichier sera disponible sous `/etc/secrets/supabase-ca.crt`. Ce certificat CA est distinct du PFX des sessions généré plus bas. Voir [Supabase TLS](https://supabase.com/docs/guides/database/psql) et [fichiers secrets Render](https://render.com/docs/docker-secrets).
+
+Dans `ConnectionStrings__DefaultConnection`, fournir une chaîne **Npgsql**, pas une URL `postgresql://…` :
+
+```text
+Host=aws-INDEX-REGION.pooler.supabase.com;Port=5432;Database=postgres;Username=postgres.REFERENCE_PROJET;Password=MOT_DE_PASSE;SSL Mode=VerifyFull;Root Certificate=/etc/secrets/supabase-ca.crt;GSS Encryption Mode=Disable;Maximum Pool Size=10
+```
+
+Remplacer les exemples par les valeurs réelles. Si le mot de passe contient un point-virgule, l’entourer de guillemets doubles dans la chaîne Npgsql (et doubler les guillemets internes). Ne pas encoder le mot de passe comme dans une URL. `GSS Encryption Mode=Disable` évite la négociation Kerberos, sans désactiver TLS. Conserver la validation du certificat. Les [paramètres Npgsql](https://www.npgsql.org/doc/connection-string-parameters) décrivent ces options.
+
+Pour un test Docker hors Render, monter le certificat en lecture seule au même chemin ; `--env-file` ne monte pas les fichiers.
 
 Créer un bucket Storage **privé** nommé `wida-originals`. Configurer les types PDF, PNG, JPEG et TIFF. Pour une bêta exclusivement F0, limiter le bucket à 4 Mio par fichier, y compris pour l’administrateur. La limite fournisseur peut alors rejeter un upload admin que l’application autoriserait localement.
 
@@ -71,7 +83,7 @@ Les clés Data Protection sont enregistrées **chiffrées** en PostgreSQL. Sauve
 
 ## 3. Déployer l’API
 
-Publier les changements dans votre dépôt Git, puis créer un **Blueprint Render** depuis le dépôt `wida-api` contenant [`render.yaml`](../render.yaml). Le Blueprint prépare le service Docker gratuit et demande les champs `sync: false`. Une création manuelle de Web Service est possible avec les mêmes variables.
+Publier les changements dans votre dépôt Git, puis créer un **Blueprint Render** depuis le dépôt `wida-api` contenant [`render.yaml`](../render.yaml). Le Blueprint prépare le service Docker gratuit et demande les champs `sync: false`. Une création manuelle de Web Service est possible avec les mêmes variables, mais elle ne reprend pas automatiquement les valeurs de `render.yaml` : saisir aussi tous les paramètres fixes listés en section 5. Ajouter le fichier CA dans les deux cas.
 
 Le Dockerfile utilise le SDK .NET 10 pour compiler et le runtime ASP.NET 10, en utilisateur non-root, pour exécuter `Wida.Api.dll`. Port HTTP interne **10000** ; Render assure le HTTPS public. Aucune clé n’est incluse dans l’image.
 
@@ -81,16 +93,18 @@ Le Dockerfile utilise le SDK .NET 10 pour compiler et le runtime ASP.NET 10, en 
 
 ## 4. Configurer le frontend
 
-Le frontend doit exécuter Next.js côté serveur, pas un export statique. Configurer ces variables sur son hébergeur, puis redéployer :
+Le frontend Vercel doit exécuter Next.js côté serveur. Dans **Settings → Environment Variables → Production**, configurer puis redéployer :
 
 ```dotenv
 WIDA_API_URL=https://VOTRE_API.onrender.com
 WIDA_PUBLIC_ORIGIN=https://VOTRE_FRONTEND
 WIDA_PROXY_SECRET=MEME_VALEUR_QUE_AUTHENTICATION_PROXYSECRET
-WIDA_CLIENT_IP_HEADER=x-real-ip
+WIDA_CLIENT_IP_HEADER=x-vercel-forwarded-for
 ```
 
-`x-real-ip` n’est approprié que si votre ingress **écrase** réellement cet en-tête avec une seule adresse vérifiée et constitue l’unique accès au frontend. Pour un autre hébergeur, utiliser son en-tête documenté ou configurer le reverse proxy. Ne pas choisir arbitrairement un en-tête transmis librement par le visiteur.
+Les deux URL doivent contenir `https://`, sans chemin `/api`. Pour un domaine API personnalisé, vérifier son DNS et son certificat TLS. Utiliser le domaine frontend canonique aussi dans Google et `Authentication__PublicOrigin`.
+
+Vercel fournit [cet en-tête IP](https://vercel.com/docs/headers/request-headers#x-vercel-forwarded-for). Sur un autre hébergeur, choisir un en-tête contenant une seule IP et écrasé par l’ingress de confiance. Voir le [guide frontend](https://github.com/samankassou/wida-front/blob/main/docs/deployment.md) pour les autres topologies et les previews.
 
 Le secret serveur authentifie le proxy en HTTPS et remplace la liste d’IP fixes côté API pour ce mode. Aucun secret ne doit utiliser un préfixe `NEXT_PUBLIC_`. Une requête directe vers l’API sans le secret est refusée, sauf `/healthz`. Les cookies, l’origine et les jetons CSRF restent vérifiés ; le secret ne remplace pas l’authentification utilisateur.
 
@@ -119,6 +133,20 @@ Les noms complets figurent aussi dans [`.env.example`](../.env.example). ASP.NET
 Le Blueprint fixe déjà : `Storage__Provider=Supabase`, le bucket `wida-originals`, `Authentication__DataProtectionProvider=Database`, `Database__ApplyMigrations=true`, `ProcessingQueue__Enabled=true`, `RabbitMQ__QueueType=classic`, un nom de file propre à ce profil, `Authentication__PublicBeta=true`, `AzureDocumentIntelligence__Tier=F0` et le port 10000. Si le bucket porte un autre nom, changer aussi `Storage__Supabase__Bucket`.
 
 Turnstile reste optionnel : si activé, reprendre les variables de [public-beta.md](public-beta.md). Aucun token ou secret réel n’est fourni par le code.
+
+## Dépannage
+
+| Erreur | Correction |
+| --- | --- |
+| `Configure Authentication:DataProtectionKeysPath` | Pour Render, définir exactement `Authentication__DataProtectionProvider=Database`, plus le PFX Base64 et son mot de passe. Ne pas utiliser un dossier éphémère comme solution. |
+| `Format of the initialization string… index 0` | Convertir la connexion PostgreSQL en chaîne Npgsql `Host=…;…`, sans préfixe de variable ni guillemets entourant toute la valeur dans le champ Render. |
+| `Network is unreachable` vers une IPv6 | Utiliser le Session pooler : changer l’hôte **et** l’utilisateur, port 5432. |
+| `Exception while performing SSL handshake` / certificat refusé | Monter le CA Supabase et renseigner `Root Certificate`, en conservant `SSL Mode=VerifyFull`. |
+| `Cannot load library libgssapi_krb5.so.2` | Ajouter `GSS Encryption Mode=Disable`. Une erreur TLS qui suit demande aussi la correction du CA. |
+| Frontend `Wida API is unavailable` | Vérifier les URL complètes HTTPS, les variables du bon environnement Vercel et le redéploiement ; voir aussi les logs et la veille Render. |
+| Retour Google vers `/` au lieu du workspace | Déployer les versions API et frontend qui prennent en charge `/workspace`. |
+
+Utiliser l’exception détaillée qui précède le code de sortie pour identifier la cause. Les logs et captures partagés ne doivent pas contenir de secrets ni de cookies.
 
 ## Test Docker local reproductible
 
@@ -149,12 +177,12 @@ Le nettoyage des originaux expirés s’exécute au réveil puis chaque heure pe
 
 ## Limites gratuites et sources
 
-Vérifiées le 13 septembre 2026, à revérifier avant création des comptes :
+Les offres changent : consulter leurs limites avant de créer ou modifier un service.
 
-- [Render Free](https://render.com/docs/free) : veille après 15 minutes sans trafic entrant, disque éphémère, 750 heures partagées par workspace. Un trafic sortant inhabituellement élevé peut suspendre le service. Les dépassements peuvent être facturés si un moyen de paiement est configuré ; examiner les limites de dépenses. Ne pas multiplier les services gratuits supposés actifs en continu dans le même quota.
-- [Supabase Free](https://supabase.com/pricing) : 500 Mo de base, 1 Go d’originaux et quotas de transfert ; pause possible après inactivité. Les résultats Azure bruts occupent aussi la base. Prévoir ses propres sauvegardes adaptées à l’offre.
-- [CloudAMQP](https://www.cloudamqp.com/plans.html) : Little Lemur gratuit, broker RabbitMQ partagé, 20 connexions, 1 million de messages/mois et durée d’inactivité maximale des files annoncée à 28 jours. Vérifier les conditions exactes de l’instance obtenue et exécuter le preflight ; la compatibilité distante n’est pas établie par les tests unitaires.
-- [Azure F0](https://learn.microsoft.com/en-us/azure/ai-services/document-intelligence/service-limits?view=doc-intel-4.0.0) : limitations de pages, tailles et cadence propres à la ressource. Ne pas basculer en S0 si le budget doit rester gratuit.
-- [Clés Supabase](https://supabase.com/docs/guides/getting-started/api-keys), [Session pooler](https://supabase.com/docs/guides/troubleshooting/supavisor-and-connection-terminology-explained-9pr_ZO) et [Data Protection EF Core](https://learn.microsoft.com/en-us/aspnet/core/security/data-protection/configuration/overview?view=aspnetcore-10.0#persist-keys-in-a-database-persistkeystodbcontext).
+- [Render Free](https://render.com/docs/free) : veille, disque éphémère, quotas de fonctionnement et de transfert.
+- [Supabase Free](https://supabase.com/pricing) : quotas de base, Storage et transfert, politique de pause et sauvegardes disponibles.
+- [CloudAMQP](https://www.cloudamqp.com/plans.html) : vérifier l’offre RabbitMQ, les limites de connexion/messages et l’expiration des files ; exécuter le preflight avec l’instance obtenue.
+- [Azure F0](https://learn.microsoft.com/en-us/azure/ai-services/document-intelligence/service-limits?view=doc-intel-4.0.0) : limites de pages, taille, cadence et consommation. Ne pas basculer en S0 si le budget doit rester gratuit.
+- [Clés Supabase](https://supabase.com/docs/guides/getting-started/api-keys) et [Data Protection EF Core](https://learn.microsoft.com/en-us/aspnet/core/security/data-protection/configuration/overview?view=aspnetcore-10.0#persist-keys-in-a-database-persistkeystodbcontext).
 
 Les tests automatisés utilisent des réponses HTTP simulées et des bases locales de test. Ils ne certifient pas l’accès à votre Supabase, Google, RabbitMQ ou Azure. Le Dockerfile a été construit et testé localement le 14 septembre 2026 sur Linux/amd64 avec Docker Desktop. Le test de démarrage et redémarrage a réussi avec PostgreSQL 17, RabbitMQ 4.2, 512 Mio de mémoire et 0,5 CPU : migrations, chiffrement et réutilisation des clés, protection du proxy et reconnexion du worker. Ce résultat ne couvre pas Supabase, Google, Azure ni une analyse OCR complète. Le test est reproductible avec `python3 deploy/smoke-test.py`.

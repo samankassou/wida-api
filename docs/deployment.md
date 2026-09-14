@@ -6,7 +6,7 @@ For the optional Render Free/Supabase deployment, use the [step-by-step configur
 
 ## Choose what to expose
 
-The companion frontend offers `/demo` without authentication or backend calls. Its sample extraction results are fictional; new demo uploads use manual entry. A connected deployment requires the Next.js server proxy, ASP.NET Core API, PostgreSQL, and Google sign-in. Automatic extraction additionally requires Azure Document Intelligence and RabbitMQ, with at least one API instance running the embedded worker continuously.
+The companion frontend offers `/demo` without authentication or backend calls. Its sample extraction results are fictional; new demo uploads use manual entry. A connected deployment requires the Next.js server proxy, ASP.NET Core API, PostgreSQL, and Google sign-in. Automatic extraction additionally requires Azure Document Intelligence and RabbitMQ, with an API instance running the embedded worker. Continuous processing requires an always-running host; the free Render profile pauses work during sleep.
 
 ## Configure the deployment
 
@@ -14,11 +14,11 @@ The companion frontend offers `/demo` without authentication or backend calls. I
 - [ ] Set `Authentication__PublicBeta` explicitly. It defaults to `true`; `false` requires an allowlist.
 - [ ] Override `Authentication__AdminEmail` with your own verified address or an empty value. The checked-in value is maintainer-specific. Existing persisted roles are managed separately; see [roles](public-beta.md#user-and-administrator-profiles).
 - [ ] Supply database, Google, Azure, and RabbitMQ credentials through protected environment settings or a secret manager. Do not publish them in source, screenshots, or logs.
-- [ ] Set the same HTTPS origin in API `Authentication__PublicOrigin` and frontend `WIDA_PUBLIC_ORIGIN`. Register its `/api/wida/auth/callback` with Google. Set server-only `WIDA_API_URL` to the private API origin.
-- [ ] Configure [trusted client-IP forwarding](public-beta.md#trusted-client-ip-required-for-live-production), including `WIDA_CLIENT_IP_HEADER` and API `RateLimiting__TrustedProxies__0`. Restrict access to the API and internal services to the required peers.
-- [ ] Persist the upload directory, PostgreSQL, RabbitMQ data, and `Authentication__DataProtectionKeysPath`. All workers need access to originals at their recorded absolute paths. Preserve those paths across releases; keys must be shared across API replicas.
-- [ ] Back up data before applying all committed migrations. Supply production configuration to the migration command; do not use Development settings for a public server. Apply migrations before restarting the updated API/worker.
-- [ ] Keep `ProcessingQueue__Enabled=true` on at least one continuously running API instance. Check broker permissions, durable storage, and acknowledgement timeout using the queue guide.
+- [ ] Set the same HTTPS origin in API `Authentication__PublicOrigin` and frontend `WIDA_PUBLIC_ORIGIN`. Register its `/api/wida/auth/callback` with Google. Set server-only `WIDA_API_URL` to the complete API origin, including its scheme and without `/api`. For Render, use HTTPS and the shared proxy secret.
+- [ ] Configure [trusted client-IP forwarding](public-beta.md#trusted-client-ip-required-for-live-production), including `WIDA_CLIENT_IP_HEADER` and either a shared proxy secret or API `RateLimiting__TrustedProxies__0`. Restrict access to the API and internal services to the required peers.
+- [ ] Persist originals (local directory or private Supabase bucket), PostgreSQL, RabbitMQ data, and session keys (protected directory or encrypted Database provider). All workers must share storage; preserve local paths and session decryption certificates across releases.
+- [ ] Back up data before applying all committed migrations. Supply production configuration to the migration command; do not use Development settings for a public server. Apply migrations before restarting the updated API/worker, or use `Database__ApplyMigrations=true` for the single-instance Render profile, which migrates before workers start.
+- [ ] Keep `ProcessingQueue__Enabled=true` on at least one API instance; use continuous hosting if processing must continue without incoming traffic. Check broker permissions, durable storage, and acknowledgement timeout using the queue guide.
 
 ## Verify before opening access
 
@@ -29,7 +29,7 @@ The companion frontend offers `/demo` without authentication or backend calls. I
 - [ ] Restore a backup in an isolated environment and confirm both invoice data and originals are usable. Plan application rollback together with database-schema compatibility.
 - [ ] Check mobile layout, keyboard navigation, loading/error states, and public `/demo` access.
 
-Record the revisions, environment, date, and outcomes. Historical test counts in this repository are not a release certification.
+Record the revisions, environment, date, and outcomes. Run the checks against the revisions being released; previous results are not a release certification.
 
 ## Operate and explain the service
 

@@ -2,7 +2,7 @@
 
 RabbitMQ distributes analysis work. A .NET `BackgroundService` consumes messages; PostgreSQL stores processing history, ownership, results and the Azure operation ID. There is no database queue scan, database worker election, or database outbox dispatcher.
 
-The [Render Free profile](render-free.md) keeps this same worker inside the API container, with external originals and session keys. It optionally uses `RabbitMQ__QueueType=classic` for a shared broker; the quorum-specific guarantees below apply to the default `quorum` mode.
+The [Render Free profile](render-free.md) keeps this same worker inside the API container, with external originals and session keys. It uses `RabbitMQ__QueueType=classic` for a shared broker; the quorum-specific guarantees below apply to the default `quorum` mode.
 
 ## Local development
 
@@ -41,7 +41,7 @@ The API hosts the worker by default. Set `ProcessingQueue__Enabled=false` on API
 
 ## Database initialization and recovery
 
-Apply all committed migrations, including `InitialCreate`, `PublicTrial`, and `UserRoles`. They provide document ownership, analysis recovery metadata, trial budgets, and account roles.
+Apply all committed migrations, including `InitialCreate`, `PublicTrial`, `UserRoles`, and `RemoteStorageAndSessionKeys`. These include ownership, recovery metadata, budgets, roles, original byte sizes and persisted session keys. The Render profile applies them at startup before workers; other deployments can use the command below.
 
 ```sh
 # From wida-api/Wida.Api
@@ -66,9 +66,9 @@ For ordinary users, admission is limited to one active job per user and 100 glob
 
 To avoid a database outbox and a lost-message gap, publication is confirmed **before** the admission transaction commits. On delivery, the consumer briefly takes the same transaction lock before looking up that one run ID. It therefore waits for admission to commit or roll back. If admission rolled back after RabbitMQ accepted the message, the orphan ID goes to the failed queue. No Azure request is made for an orphan. A network error during confirmation/commit may yield a failed HTTP response despite accepted work; retry the same document or inspect its history. This is not a distributed transaction or an exactly-once guarantee.
 
-The main queue is a durable **quorum queue**, with persistent messages, `mandatory` publishing and publisher confirms. `x-single-active-consumer=true` coordinates standby workers across replicas; `prefetch=1` limits the active consumer to one unacknowledged delivery. An ID-only message remains unacknowledged until its persisted run is terminal. Success is acknowledged; failure or malformed/orphan messages are rejected into `<queue>.failed`. At-least-once dead-lettering is enabled with `reject-publish` overflow. Main queue capacity is 1,000 messages, accounting for duplicate deliveries as well as jobs. Monitor the failed queue separately.
+By default, the main queue is a durable **quorum queue**, with persistent messages, `mandatory` publishing and publisher confirms. `x-single-active-consumer=true` coordinates standby workers across replicas; `prefetch=1` limits the active consumer to one unacknowledged delivery. An ID-only message remains unacknowledged until its persisted run is terminal. Success is acknowledged; failure or malformed/orphan messages are rejected into `<queue>.failed`. At-least-once dead-lettering is enabled with `reject-publish` overflow. Main queue capacity is 1,000 messages, accounting for duplicate deliveries as well as jobs. Monitor the failed queue separately.
 
-The broker's automatic delivery-count limit is disabled: an infrastructure outage must not silently exhaust it while the database is unavailable. A consumer infrastructure failure closes its connection and retries after five seconds; RabbitMQ redelivers its unacknowledged message. Application/Azure retries are bounded separately. A lost channel, cancelled consumer or lost connection cancels in-flight processing before reconnecting. As with any broker and external API, an in-flight network partition cannot guarantee exactly-once effects.
+In quorum mode, the broker's automatic delivery-count limit is disabled: an infrastructure outage must not silently exhaust it while the database is unavailable. A consumer infrastructure failure closes its connection and retries after five seconds; RabbitMQ redelivers its unacknowledged message. Application/Azure retries are bounded separately. A lost channel, cancelled consumer or lost connection cancels in-flight processing before reconnecting. As with any broker and external API, an in-flight network partition cannot guarantee exactly-once effects.
 
 ## Azure tracking and frontend
 
@@ -78,7 +78,7 @@ Only a definite HTTP 429 submission rejection can retry POST automatically. Poll
 
 The frontend retains its existing queued state and three-second status polling, with ten-second backoff on retrieval errors. Reload restores known active runs from server history. Invoice edits and saved status survive result updates. Manual history-only runs are never published.
 
-## Tests and remaining launch work
+## Verification
 
 Normal `dotnet test Wida.slnx` covers admission rollback, owner isolation, Azure restart/uncertainty handling, HTTP mapping and retry behavior without an external broker. Optional integration tests use real PostgreSQL and RabbitMQ:
 
@@ -90,6 +90,6 @@ dotnet test Wida.slnx
 
 Use disposable services. Tests create/drop randomly named `wida_queue_test_*` databases and `wida.test.*` queues. They cover concurrent admission, two consumers, unacknowledged redelivery/restart, and a confirmed message whose database transaction rolls back. Azure is simulated; live Azure end-to-end validation remains necessary.
 
-Public signup, lifetime credits, monthly budget enforcement, F0 file/page validation, original retention and optional Turnstile are implemented. Apply the new migration and follow the [public beta deployment guide](public-beta.md).
+Public signup, lifetime credits, monthly budget enforcement, F0 file/page validation, original retention and optional Turnstile are implemented. Apply all committed migrations and follow the [public beta deployment guide](public-beta.md).
 
 References: [RabbitMQ .NET client](https://www.rabbitmq.com/client-libraries/dotnet-api-guide), [publisher confirms](https://www.rabbitmq.com/tutorials/tutorial-seven-dotnet), [quorum queues and dead lettering](https://www.rabbitmq.com/docs/quorum-queues).

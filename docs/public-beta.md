@@ -19,10 +19,11 @@
 
 Start with the [deployment checklist](deployment.md), including administrator identity, persistent storage, backups, and verification. These are application defaults for a self-hosted instance, not a promise of a hosted service or free third-party resources.
 
-Run migrations **before restarting API and worker**:
+Apply all migrations **before starting API and worker**, either with `Database__ApplyMigrations=true` in the single-instance Render profile or explicitly from `Wida.Api`:
 
 ```sh
-dotnet ef database update --project Wida.Dal --startup-project Wida.Api
+dotnet tool restore
+dotnet ef database update --project ../Wida.Dal --startup-project .
 ```
 
 Do not run `EnsureCreated` on an existing database. Existing users receive a 4-page allowance through the migration. Review existing Azure consumption before opening the beta: initialize the current `AnalysisBudgets` row with pages already spent on this resource, so the launch does not incorrectly start its global budget at zero. Back up the database and originals before applying production migrations.
@@ -67,8 +68,13 @@ To demote the configured initial admin, first remove/change `Authentication:Admi
 
 The public ingress must overwrite a dedicated single-IP header with the actual client address, and Next.js must only be reachable through that ingress. For example, when Nginx directly receives the public connection, use `proxy_set_header X-Real-IP $remote_addr;` and set frontend `WIDA_CLIENT_IP_HEADER=x-real-ip`. If Nginx itself sits behind another proxy, configure its trusted real-IP handling first. Do not take the first value of an arbitrary `X-Forwarded-For` chain or use a header the caller can supply unchanged.
 
-Next.js validates that header as one IPv4/IPv6 address and sends it as `X-Wida-Client-IP`, replacing any caller-supplied value. Configure API `RateLimiting__TrustedProxies__0` (and `__1`, etc.) with the exact connection IP addresses of your Next.js servers as seen by the API. The API rejects other peers and missing/malformed client IPs. Keep the API port private. With a same-host proxy this may be `127.0.0.1` and/or `::1`; use your actual topology, not these examples blindly.
+For Vercel, set `WIDA_CLIENT_IP_HEADER=x-vercel-forwarded-for` using its [documented header](https://vercel.com/docs/headers/request-headers#x-vercel-forwarded-for). Next.js validates one IPv4/IPv6 address and sends `X-Wida-Client-IP`, replacing any visitor-supplied value.
 
-Production API startup fails without a trusted proxy list; the production frontend returns `503` if the ingress header configuration or IP is missing. Deploy the environment settings with these changes. Local Development without the settings uses the socket IP and ignores all caller-supplied IP headers. No database migration is required for these fixes.
+The API supports two trust modes:
 
-Trust is restricted to known proxy addresses, consistent with [ASP.NET Core proxy guidance](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/proxy-load-balancer?view=aspnetcore-10.0). Continue to apply ingress-level traffic limits to protect the frontend and authentication middleware before application-level account quotas run.
+- Public HTTPS API (Render): configure the same random secret of at least 32 characters in API `Authentication__ProxySecret` and frontend `WIDA_PROXY_SECRET`. No fixed outbound IP list is needed.
+- Private API: configure `RateLimiting__TrustedProxies__0` (and `__1`, etc.) with the actual Next.js peer addresses as seen by the API, and restrict network access to those peers.
+
+Production startup requires one of these trust modes. The frontend returns `503` if its client-IP header setting or value is missing/invalid. A valid proxy secret does not replace user authentication, ownership or CSRF. Development without these settings uses the socket IP and ignores caller-supplied client-IP headers.
+
+Trust is restrictedFor the private-IP mode, trust is restricted to known proxy addresses, consistent with [ASP.NET Core proxy guidance](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/proxy-load-balancer?view=aspnetcore-10.0). Continue to apply ingress-level traffic limits to protect the frontend and authentication middleware before application-level account quotas run.
