@@ -22,7 +22,7 @@ Wida is an open-source ASP.NET Core API for uploading documents, recording invoi
 - Load a bounded document workspace with saved invoices and latest extraction runs.
 - Create, update, list, and retrieve one invoice per document, with optional line items and field-specific validation errors.
 - Record a manual processing run or request Azure's `prebuilt-invoice` analysis.
-- Retrieve processing status, extracted fields, confidence scores, and failure information.
+- Retrieve processing status, extracted fields, confidence scores, and failure information. New Azure results include source polygons and matching page dimensions for header and line-item highlights; no database migration is needed.
 - Inspect the API through OpenAPI and Scalar in Development with an authenticated session.
 
 Analysis is queued durably in RabbitMQ and processed by a .NET background worker. The endpoint returns 202 immediately; clients poll the run for completion. See [queue setup and recovery](docs/processing-queue.md). It records extracted fields and updates unsaved documents through processing/review/failure states. Saving invoice data sets `Saved`; reanalysis preserves that state even when saving occurs while extraction is still running. Analysis extracts invoice headers and line items but does not create an invoice. The API has no approval or export endpoints; the companion frontend exports loaded invoice headers as CSV. The API requires a Google-backed Wida session and restricts each user to their own documents. See [Google sign-in and pilot access](docs/authentication.md).

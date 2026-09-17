@@ -14,6 +14,39 @@ namespace Wida.Tests;
 public class AzureDocumentAnalyzerTests
 {
     [Fact]
+    public void MapResult_IncludesMatchingPageGeometryForHeadersAndLineItems()
+    {
+        var sdkResult = ModelReaderWriter.Read<AnalyzeResult>(BinaryData.FromString("""
+            {
+              "apiVersion": "2024-11-30", "modelId": "prebuilt-invoice", "content": "",
+              "pages": [
+                { "pageNumber": 1, "width": 600, "height": 800, "unit": "pixel", "spans": [] },
+                { "pageNumber": 2, "width": 8.5, "height": 11, "unit": "inch", "spans": [] }
+              ],
+              "documents": [{ "docType": "invoice", "spans": [], "fields": {
+                "InvoiceId": { "type": "string", "valueString": "INV-42",
+                  "boundingRegions": [{ "pageNumber": 2, "polygon": [1,2,3,2,3,4,1,4] }] },
+                "Items": { "type": "array", "valueArray": [{ "type": "object", "valueObject": {
+                  "Description": { "type": "string", "valueString": "Design",
+                    "boundingRegions": [{ "pageNumber": 1, "polygon": [10,20,30,20,30,40,10,40] }] }
+                }}] }
+              }}]
+            }
+            """))!;
+        var fields = AzureDocumentAnalyzer.MapResult(sdkResult).Fields.ToDictionary(field => field.Name);
+        var header = fields["InvoiceId"].BoundingBox!.Value;
+        Assert.Equal(8.5, header.GetProperty("pageWidth").GetDouble());
+        Assert.Equal(11, header.GetProperty("pageHeight").GetDouble());
+        Assert.Equal("inch", header.GetProperty("unit").GetString());
+        Assert.Equal(8, header.GetProperty("polygon").GetArrayLength());
+        Assert.Equal(2, fields["InvoiceId"].PageNumber);
+        var line = fields["Items[0].Description"].BoundingBox!.Value;
+        Assert.Equal(600, line.GetProperty("pageWidth").GetDouble());
+        Assert.Equal(800, line.GetProperty("pageHeight").GetDouble());
+        Assert.Equal("pixel", line.GetProperty("unit").GetString());
+    }
+
+    [Fact]
     public async Task AnalyzeInvoiceAsync_MapsTypedHeaderFieldsAndKeepsRawSdkResult()
     {
         var sdkResult = ModelReaderWriter.Read<AnalyzeResult>(BinaryData.FromString("""

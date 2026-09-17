@@ -74,7 +74,7 @@ public class AzureDocumentAnalyzer : IDocumentAnalyzer
         var document = result.Documents[0];
         foreach (var fieldName in InvoiceFields)
         {
-            AddField(document, analysis, fieldName);
+            AddField(document, analysis, fieldName, result.Pages);
         }
 
         if (document.Fields.TryGetValue("Items", out var items)
@@ -88,7 +88,7 @@ public class AzureDocumentAnalyzer : IDocumentAnalyzer
                 {
                     if (item.ValueDictionary.TryGetValue(fieldName, out var field))
                     {
-                        AddField(analysis, $"Items[{index}].{fieldName}", field);
+                        AddField(analysis, $"Items[{index}].{fieldName}", field, result.Pages);
                     }
                 }
             }
@@ -128,21 +128,23 @@ public class AzureDocumentAnalyzer : IDocumentAnalyzer
     private static void AddField(
         AnalyzedDocument document,
         DocumentAnalysisResult result,
-        string fieldName)
+        string fieldName,
+        IReadOnlyList<DocumentPage> pages)
     {
         if (!document.Fields.TryGetValue(fieldName, out var field))
         {
             return;
         }
 
-        AddField(result, fieldName, field);
+        AddField(result, fieldName, field, pages);
     }
 
-    private static void AddField(DocumentAnalysisResult result, string fieldName, DocumentField field)
+    private static void AddField(DocumentAnalysisResult result, string fieldName, DocumentField field, IReadOnlyList<DocumentPage> pages)
     {
         BoundingRegion? region = field.BoundingRegions.Count == 0
             ? null
             : field.BoundingRegions[0];
+        var page = region is null ? null : pages.FirstOrDefault(page => page.PageNumber == region.Value.PageNumber);
         result.Fields.Add(new AnalyzedField
         {
             Name = fieldName,
@@ -154,7 +156,15 @@ public class AzureDocumentAnalyzer : IDocumentAnalyzer
             PageNumber = region?.PageNumber,
             BoundingBox = region is null
                 ? null
-                : JsonSerializer.SerializeToElement(region.Value.Polygon)
+                : page?.Width is > 0 && page.Height is > 0
+                    ? JsonSerializer.SerializeToElement(new
+                    {
+                        polygon = region.Value.Polygon,
+                        pageWidth = page.Width,
+                        pageHeight = page.Height,
+                        unit = page.Unit?.ToString()
+                    })
+                    : JsonSerializer.SerializeToElement(region.Value.Polygon)
         });
     }
 

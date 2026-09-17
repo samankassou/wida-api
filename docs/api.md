@@ -270,7 +270,7 @@ Creation and both processing GET routes use this response shape. Each extracted 
 | `confidence` | number or null | Azure confidence score; stored with four decimal places |
 | `source` | string enum | `DocumentIntelligence` for this analyzer |
 | `pageNumber` | integer or null | Page number from the first bounding region, when present |
-| `boundingBox` | JSON array or null | Polygon coordinates from the first bounding region, when present |
+| `boundingBox` | JSON object, legacy array, or null | New Azure results include `{ polygon, pageWidth, pageHeight, unit }` for the first bounding region and its matching page. Coordinates use a top-left origin and the page unit (inches for PDFs, pixels for images). Older results or results without page dimensions retain the polygon array; clients must not guess its units. |
 | `requiresReview` | boolean | True when confidence is missing or below `0.80` |
 
 Normalized values and bounding data are JSON values, not strings containing JSON. Raw analysis remains internal and has no retrieval endpoint. There is no endpoint to edit extracted fields or record a review decision.
