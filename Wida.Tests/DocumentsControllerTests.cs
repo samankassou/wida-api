@@ -244,7 +244,11 @@ public sealed class DocumentsControllerTests : IDisposable
         using var stream = new MemoryStream(bytes);
         var file = new FormFile(stream, 0, bytes.Length, "file", "renamed.pdf") { Headers = new HeaderDictionary(), ContentType = "application/pdf" };
         var service = new StubDocumentService((_, _, _, _) => throw new Exception("Must not persist")) { Record = CreateDocument() };
-        Assert.IsType<OkObjectResult>(await CreateController(service).Upload(file, default));
+        var result = Assert.IsType<OkObjectResult>(await CreateController(service).Upload(file, default));
+        var response = Assert.IsType<DocumentResponse>(result.Value);
+        Assert.True(response.IsDuplicate);
+        Assert.False(response.OriginalRestored);
+        Assert.Equal(0, service.CreateCalls);
         Assert.Equal(10, await db.Documents.CountAsync());
         Assert.Single(Directory.GetFiles(_contentRoot, "*", SearchOption.AllDirectories));
     }

@@ -9,5 +9,7 @@ public record DocumentResponse(
     DocumentType DocumentType,
     DocumentStatus Status,
     DateTime UploadedAt,
-    int PageCount = 0
+    int PageCount = 0,
+    bool IsDuplicate = false,
+    bool OriginalRestored = false
 );

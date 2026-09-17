@@ -79,6 +79,15 @@ public class InvoicesController : ControllerBase
     private async Task<IActionResult> WithInvoiceErrors(Func<Task<IActionResult>> action)
     {
         try { return await action(); }
+        catch (DuplicateInvoiceException exception)
+        {
+            var problem = new ProblemDetails { Status = 409, Title = "Possible duplicate invoice", Detail = exception.Message };
+            problem.Extensions["code"] = "DUPLICATE_INVOICE";
+            problem.Extensions["matches"] = exception.Matches;
+            var result = Conflict(problem);
+            result.ContentTypes.Add("application/problem+json");
+            return result;
+        }
         catch (InvoiceValidationException exception)
         {
             var result = BadRequest(new ValidationProblemDetails(exception.Errors.ToDictionary())

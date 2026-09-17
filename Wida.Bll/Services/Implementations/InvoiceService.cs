@@ -72,6 +72,7 @@ public class InvoiceService : IInvoiceService
                 "An invoice already exists for this document.");
         }
 
+        await CheckDuplicatesAsync(request, cancellationToken);
         var invoice = new Invoice { DocumentId = request.DocumentId };
         Apply(invoice, request);
         invoice.Lines = CreateLines(invoice.Id, request);
@@ -99,12 +100,24 @@ public class InvoiceService : IInvoiceService
         Validate(request);
         var document = await _documentRepository.GetByIdAsync(invoice.DocumentId, cancellationToken)
             ?? throw new DocumentNotFoundException(invoice.DocumentId);
+        await CheckDuplicatesAsync(request, cancellationToken);
         Apply(invoice, request);
         _invoiceRepository.ReplaceLines(invoice, CreateLines(invoice.Id, request));
         invoice.UpdatedAt = DateTime.UtcNow;
         MarkSaved(document);
         await _invoiceRepository.SaveChangesAsync(cancellationToken);
         return Map(invoice);
+    }
+
+    private async Task CheckDuplicatesAsync(CreateInvoiceRequest request, CancellationToken cancellationToken)
+    {
+        if (request.AllowDuplicate) return;
+        var matches = await _invoiceRepository.FindDuplicatesAsync(request.SupplierName!, request.InvoiceNumber!,
+            request.DocumentId, cancellationToken);
+        if (matches.Count > 0)
+            throw new DuplicateInvoiceException(matches.Select(invoice => new DuplicateInvoiceResponse(
+                invoice.Id, invoice.DocumentId, invoice.SupplierName, invoice.InvoiceNumber,
+                invoice.InvoiceDate, invoice.Currency, invoice.TotalAmount)).ToList());
     }
 
     private static void Validate(CreateInvoiceRequest request)

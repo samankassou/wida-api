@@ -369,3 +369,21 @@ These routes require an `Admin` session, with the role rechecked in the database
 - `GET /api/admin/metrics`: global counts of users, documents, invoices, completed/failed/active analyses, credit requests, and the current UTC month's reserved analysis pages. Counts reflect stored records; reanalyses are distinct runs.
 
 These routes do not expose other users' original files or invoice contents. Individual page grants do not change the shared monthly budget or provider file limits.
+
+## Duplicate upload and invoice checks
+
+`POST /api/documents` returns the existing owner-scoped document with HTTP 200 and `isDuplicate: true` for identical SHA-256 contents. `originalRestored: true` additionally means a missing/expired original was replaced. New uploads return HTTP 201 with both flags false. Clients should offer the existing document and skip automatic analysis for duplicates. Existing analysis and saved invoice data are retained.
+
+`POST /api/invoices` and `PUT /api/invoices/{id}` check saved invoices owned by the current user, excluding the request’s document. Both supplier name and invoice number must match after trimming, collapsing whitespace, and invariant case conversion; punctuation is preserved. Matching is advisory, irrespective of amount/date differences. A match returns HTTP 409 before writing:
+
+```json
+{
+  "status": 409,
+  "title": "Possible duplicate invoice",
+  "code": "DUPLICATE_INVOICE",
+  "detail": "A saved invoice has the same supplier and invoice number. Review it before saving.",
+  "matches": [{ "id": "invoice-uuid", "documentId": "document-uuid", "supplierName": "Example Supplier", "invoiceNumber": "INV-001", "invoiceDate": "2026-09-01", "currency": "EUR", "totalAmount": 120 }]
+}
+```
+
+After user acknowledgement, retry the same create/update payload with `allowDuplicate: true` (default false). The one-invoice-per-document rule and validation still apply. Checks stream account-scoped invoice headers across all saved records, returning at most ten matches; they do not depend on the workspace list limit. No migration is required. There is no cross-document uniqueness constraint, so concurrent saves can both succeed before either sees a match.

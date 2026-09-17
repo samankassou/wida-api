@@ -6,6 +6,8 @@ public interface IInvoiceRepository
 {
     Task<IReadOnlyList<Invoice>> GetAllAsync(CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyList<Invoice>> FindDuplicatesAsync(string supplierName, string invoiceNumber, Guid documentId, CancellationToken cancellationToken = default);
+
     void ReplaceLines(Invoice invoice, IEnumerable<InvoiceLine> lines);
 
     Task<Invoice?> GetByIdAsync(

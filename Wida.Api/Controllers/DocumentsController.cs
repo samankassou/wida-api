@@ -188,7 +188,7 @@ public class DocumentsController : ControllerBase
                 System.IO.File.Delete(physicalPath);
                 var existingResponse = await _documentService.GetByIdAsync(duplicate.Id, cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
-                return Ok(existingResponse);
+                return Ok(existingResponse! with { IsDuplicate = true });
             }
             if (duplicate is null && !User.IsInRole("Admin") && await db.Documents.CountAsync(cancellationToken) >= 10)
                 throw new TrialLimitException("La bêta est limitée à 10 documents par compte.");
@@ -208,7 +208,7 @@ public class DocumentsController : ControllerBase
                 try { await _storage.DeleteAsync(expiredPath, cancellationToken); }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 { HttpContext.RequestServices.GetService<ILogger<DocumentsController>>()?.LogWarning("Could not remove replaced original {DocumentId}.", duplicate.Id); }
-                return Ok(existingResponse);
+                return Ok(existingResponse! with { IsDuplicate = true, OriginalRestored = true });
             }
             var document = await _documentService.CreateAsync(
                 fileName,

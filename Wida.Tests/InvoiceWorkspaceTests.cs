@@ -15,6 +15,85 @@ namespace Wida.Tests;
 public class InvoiceWorkspaceTests
 {
     [Fact]
+    public async Task Same_supplier_and_number_warn_before_writing_and_explicit_override_saves()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var service = fixture.InvoiceService();
+        var first = await service.CreateAsync(ValidInvoice(fixture.Document.Id));
+        var other = new Document();
+        fixture.Context.Documents.Add(other);
+        await fixture.Context.SaveChangesAsync();
+        var request = ValidInvoice(other.Id);
+        request.SupplierName = "  example   SUPPLIER ";
+        request.InvoiceNumber = " inv-001 ";
+        var conflict = await Assert.ThrowsAsync<DuplicateInvoiceException>(() => service.CreateAsync(request));
+        Assert.Equal(first.Id, Assert.Single(conflict.Matches).Id);
+        Assert.Equal(DocumentStatus.Uploaded, other.Status);
+        Assert.Single(await fixture.Context.Invoices.ToListAsync());
+        request.AllowDuplicate = true;
+        var second = await service.CreateAsync(request);
+        Assert.NotEqual(first.Id, second.Id);
+        Assert.Equal(2, await fixture.Context.Invoices.CountAsync());
+    }
+
+    [Fact]
+    public async Task Updates_exclude_the_current_document_but_warn_when_identity_changes_to_a_match()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var service = fixture.InvoiceService();
+        var first = await service.CreateAsync(ValidInvoice(fixture.Document.Id));
+        await service.UpdateAsync(first.Id, ValidInvoice(fixture.Document.Id));
+        var other = new Document();
+        fixture.Context.Documents.Add(other);
+        await fixture.Context.SaveChangesAsync();
+        var request = ValidInvoice(other.Id);
+        request.InvoiceNumber = "INV-002";
+        var second = await service.CreateAsync(request);
+        request.InvoiceNumber = "INV-001";
+        await Assert.ThrowsAsync<DuplicateInvoiceException>(() => service.UpdateAsync(second.Id, request));
+        Assert.Equal("INV-002", (await service.GetByIdAsync(second.Id))!.InvoiceNumber);
+    }
+
+    [Fact]
+    public async Task Duplicate_candidates_are_owner_scoped_and_not_limited_to_the_workspace_window()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var first = await fixture.InvoiceService().CreateAsync(ValidInvoice(fixture.Document.Id));
+        fixture.Context.Documents.AddRange(Enumerable.Range(0, 501).Select(_ => new Document()));
+        await fixture.Context.SaveChangesAsync();
+        var matches = await new InvoiceRepository(fixture.Context).FindDuplicatesAsync("example supplier", "inv-001", Guid.NewGuid());
+        Assert.Equal(first.Id, Assert.Single(matches).Id);
+        await using var otherContext = fixture.OpenContext(new TestCurrentUser(Guid.NewGuid()));
+        Assert.Empty(await new InvoiceRepository(otherContext).FindDuplicatesAsync("example supplier", "inv-001", Guid.NewGuid()));
+    }
+
+    [Theory]
+    [InlineData("Another Supplier", "INV-001")]
+    [InlineData("Example Supplier", "INV001")]
+    [InlineData("Example Supplier", "INV-002")]
+    public async Task Different_supplier_or_number_does_not_match(string supplier, string number)
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        await fixture.InvoiceService().CreateAsync(ValidInvoice(fixture.Document.Id));
+        Assert.Empty(await new InvoiceRepository(fixture.Context).FindDuplicatesAsync(supplier, number, Guid.NewGuid()));
+    }
+
+    [Fact]
+    public async Task Duplicate_warning_has_a_structured_conflict_response()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        await fixture.InvoiceService().CreateAsync(ValidInvoice(fixture.Document.Id));
+        var other = new Document();
+        fixture.Context.Documents.Add(other);
+        await fixture.Context.SaveChangesAsync();
+        var controller = new InvoicesController(fixture.InvoiceService());
+        var response = Assert.IsType<ConflictObjectResult>(await controller.Create(ValidInvoice(other.Id), default));
+        var problem = Assert.IsType<ProblemDetails>(response.Value);
+        Assert.Equal("DUPLICATE_INVOICE", problem.Extensions["code"]);
+        Assert.Single(Assert.IsAssignableFrom<IReadOnlyList<DuplicateInvoiceResponse>>(problem.Extensions["matches"]));
+    }
+
+    [Fact]
     public async Task Tax_inclusive_lines_with_net_unit_prices_preserve_source_amounts()
     {
         await using var fixture = await Fixture.CreateAsync();
@@ -446,7 +525,7 @@ public class InvoiceWorkspaceTests
             return fixture;
         }
 
-        public WidaDbContext OpenContext() => new(_options, TestCurrentUser.Default);
+        public WidaDbContext OpenContext(TestCurrentUser? user = null) => new(_options, user ?? TestCurrentUser.Default);
 
         public InvoiceService InvoiceService() => new(new InvoiceRepository(Context), new DocumentRepository(Context));
 

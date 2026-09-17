@@ -2,6 +2,8 @@ namespace Wida.Bll.Dtos.Invoices;
 
 public class CreateInvoiceRequest
 {
+    public bool AllowDuplicate { get; set; }
+
     public Guid DocumentId { get; set; }
 
     public string? SupplierName { get; set; }
