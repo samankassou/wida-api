@@ -36,6 +36,41 @@ public sealed class RabbitMqQueueFactAttribute : FactAttribute
 public sealed class PostgresQueueTests
 {
     [PostgresQueueFact]
+    public async Task Workspace_search_executes_against_PostgreSql_for_saved_and_extracted_values()
+    {
+        await using var f = await Fixture.CreateAsync();
+        await using var db = f.Open();
+        var extracted = new Document { OriginalFileName = "extracted.pdf" };
+        db.Documents.Add(extracted);
+        db.ProcessingRuns.Add(new ProcessingRun {
+            DocumentId = extracted.Id, Status = ProcessingStatus.Completed,
+            ExtractedFields = [
+                new() { FieldName = "VendorName", NormalizedValue = "\"Ghost extracted\"" },
+                new() { FieldName = "InvoiceId", NormalizedValue = "\"EXTRACT-001\"" },
+                new() { FieldName = "InvoiceTotal", NormalizedValue = "{\"amount\":120,\"currencyCode\":\"EUR\"}", Confidence = 0.9m }
+            ]
+        });
+        await db.SaveChangesAsync();
+        var invoices = new InvoiceService(new Wida.Dal.Repositories.Implementations.InvoiceRepository(db),
+            new Wida.Dal.Repositories.Implementations.DocumentRepository(db));
+        await invoices.CreateAsync(new() {
+            DocumentId = f.DocumentId, SupplierName = "Ghost saved", InvoiceNumber = "SAVED-001",
+            InvoiceDate = new DateOnly(2026, 9, 17), Lines = [],
+            Currency = "EUR", SubtotalAmount = 100, TaxAmount = 20, TotalAmount = 120
+        });
+        var workspace = new WorkspaceService(db);
+        var saved = await workspace.GetPageAsync(new() { Search = "gh", View = "invoices" }, default);
+        Assert.Equal(f.DocumentId, Assert.Single(saved.Items).Document.Id);
+        var both = await workspace.GetPageAsync(new() { Search = "GH", Sort = "supplier", PageSize = 1 }, default);
+        Assert.Equal(2, both.Total);
+        Assert.Equal(extracted.Id, Assert.Single(both.Items).Document.Id);
+        var byNumber = await workspace.GetPageAsync(new() { Search = "extract-001", Currency = "EUR" }, default);
+        Assert.Equal(extracted.Id, Assert.Single(byNumber.Items).Document.Id);
+        foreach (var search in new[] { "no-match", "%", "_", "'" })
+            Assert.Empty((await workspace.GetPageAsync(new() { Search = search }, default)).Items);
+    }
+
+    [PostgresQueueFact]
     public async Task Concurrent_manual_requests_across_contexts_create_only_one_run()
     {
         await using var f = await Fixture.CreateAsync();

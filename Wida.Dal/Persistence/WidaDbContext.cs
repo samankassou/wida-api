@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Query.SqlExpressions;
 using Microsoft.AspNetCore.DataProtection.EntityFrameworkCore;
 using Wida.Dal.Entities;
 using Wida.Dal.Enums;
@@ -28,6 +29,22 @@ public class WidaDbContext(DbContextOptions<WidaDbContext> options, ICurrentUser
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        foreach (var name in new[] { nameof(WorkspaceJson.Value), nameof(WorkspaceJson.Property) })
+        {
+            var function = modelBuilder.HasDbFunction(typeof(WorkspaceJson).GetMethod(name)!)
+                .HasName("jsonb_extract_path_text").IsBuiltIn();
+            function.HasParameter("json").HasStoreType("jsonb");
+            if (name == nameof(WorkspaceJson.Value))
+            {
+                // A scalar JSON value has an empty path. PostgreSQL requires an
+                // explicit empty VARIADIC array; the one-argument call is invalid.
+                function.HasTranslation(arguments => new SqlFunctionExpression(
+                    "jsonb_extract_path_text",
+                    [arguments[0], new SqlFragmentExpression("VARIADIC ARRAY[]::text[]")],
+                    nullable: true, argumentsPropagateNullability: [true, false],
+                    typeof(string), typeMapping: null));
+            }
+        }
         modelBuilder.ApplyConfigurationsFromAssembly(
             typeof(WidaDbContext).Assembly);
 

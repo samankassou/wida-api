@@ -487,6 +487,84 @@ public class InvoiceWorkspaceTests
         Assert.False(string.IsNullOrWhiteSpace(problem.Detail));
     }
 
+    [Fact]
+    public void Workspace_queries_translate_to_PostgreSql_including_extracted_values()
+    {
+        using var db = new WidaDbContext(new DbContextOptionsBuilder<WidaDbContext>()
+            .UseNpgsql("Host=localhost;Database=test;Username=test;Password=test").Options, TestCurrentUser.Default);
+        var rows = new WorkspaceService(db).Rows();
+        var sql = rows.Where(x => x.Currency == "EUR" && x.Supplier.ToLower().Contains("vendor"))
+            .OrderBy(x => x.Supplier).ThenBy(x => x.Id).Skip(10).Take(10).ToQueryString();
+        Assert.Contains("jsonb_extract_path_text", sql);
+        Assert.Contains("VARIADIC ARRAY[]::text[]", sql);
+        Assert.Contains("LIMIT", sql);
+        Assert.Contains("OFFSET", sql);
+        Assert.Contains("OwnerUserId", sql);
+        Assert.Contains("GROUP BY", rows.GroupBy(x => x.Stage).Select(g => new { g.Key, Count = g.Count() }).ToQueryString());
+        Assert.Contains("GROUP BY", rows.GroupBy(x => new { x.UploadedAt.Year, x.UploadedAt.Month })
+            .Select(g => new { g.Key, Count = g.Count(), Saved = g.Count(x => x.Saved) }).ToQueryString());
+    }
+
+    [Fact]
+    public async Task Workspace_pages_filter_before_pagination_keep_global_totals_and_scope_owners()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var time = DateTime.UtcNow;
+        fixture.Document.UploadedAt = time.AddDays(-60);
+        fixture.Context.Documents.AddRange(Enumerable.Range(0, 505).Select(i => new Document {
+            OriginalFileName = $"document-{i:D3}.pdf", UploadedAt = time.AddMinutes(-i)
+        }));
+        await fixture.Context.SaveChangesAsync();
+        await fixture.InvoiceService().CreateAsync(ValidInvoice(fixture.Document.Id));
+        var service = new WorkspaceService(fixture.Context);
+        var first = await service.GetPageAsync(new() { PageSize = 25 }, default);
+        var second = await service.GetPageAsync(new() { PageSize = 25, Page = 2 }, default);
+        Assert.Equal(506, first.Total);
+        Assert.Equal(25, first.Items.Count);
+        Assert.Empty(first.Items.Select(x => x.Document.Id).Intersect(second.Items.Select(x => x.Document.Id)));
+        var found = await service.GetPageAsync(new() { Search = "EXAMPLE", Currency = "USD", View = "invoices", Page = int.MaxValue }, default);
+        Assert.Equal(fixture.Document.Id, Assert.Single(found.Items).Document.Id);
+        Assert.Equal(1, found.Total);
+        Assert.Equal(1, found.Page);
+        Assert.Equal(506, found.Summary.Total);
+        Assert.Equal(1, found.Summary.Counts["saved"]);
+        Assert.Contains("USD", found.Summary.Currencies);
+        Assert.Empty((await service.GetPageAsync(new() { Period = "7", View = "invoices" }, default)).Items);
+        var oldest = await service.GetPageAsync(new() { Sort = "oldest", PageSize = 1 }, default);
+        Assert.Equal(fixture.Document.Id, Assert.Single(oldest.Items).Document.Id);
+        await using var other = fixture.OpenContext(new TestCurrentUser(Guid.NewGuid()));
+        Assert.Equal(0, (await new WorkspaceService(other).GetPageAsync(new(), default)).Summary.Total);
+        Assert.Null(await new WorkspaceService(other).GetItemAsync(fixture.Document.Id, default));
+    }
+
+    [Fact]
+    public async Task Workspace_filters_use_only_latest_extraction_and_saved_reanalyses_stay_active()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var document = fixture.Document;
+        var older = new ProcessingRun { DocumentId = document.Id, Status = ProcessingStatus.Failed, StartedAt = DateTime.UtcNow.AddDays(-1) };
+        var latest = new ProcessingRun { DocumentId = document.Id, Status = ProcessingStatus.Completed,
+            ExtractedFields = [
+                new() { FieldName = "VendorName", RawValue = "wrong", NormalizedValue = "\"Acme\"" },
+                new() { FieldName = "InvoiceId", NormalizedValue = "\"INV-EXTRACTED\"" },
+                new() { FieldName = "InvoiceTotal", NormalizedValue = "{\"amount\":120,\"currencyCode\":\"eur\"}", Confidence = 0.9m }
+            ] };
+        fixture.Context.ProcessingRuns.AddRange(older, latest);
+        await fixture.Context.SaveChangesAsync();
+        var service = new WorkspaceService(fixture.Context);
+        var result = await service.GetPageAsync(new() { Filter = "review", Currency = "EUR", Search = "acme", Sort = "supplier" }, default);
+        Assert.Equal(document.Id, Assert.Single(result.Items).Document.Id);
+        Assert.Empty((await service.GetPageAsync(new() { Filter = "failed" }, default)).Items);
+        Assert.Single((await service.GetPageAsync(new() { Search = "inv-extracted" }, default)).Items);
+        await fixture.InvoiceService().CreateAsync(ValidInvoice(document.Id));
+        latest.Status = ProcessingStatus.Running;
+        await fixture.Context.SaveChangesAsync();
+        result = await service.GetPageAsync(new() { Filter = "processing" }, default);
+        Assert.Single(result.Items);
+        Assert.Equal(1, result.Summary.Counts["saved"]);
+        Assert.Equal(1, result.Summary.Active);
+    }
+
     private static CreateInvoiceRequest ValidInvoice(Guid documentId) => new()
     {
         DocumentId = documentId,

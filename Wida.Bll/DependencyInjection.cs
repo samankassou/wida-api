@@ -10,6 +10,7 @@ public static class DependencyInjection
         this IServiceCollection services)
     {
         services.AddScoped<IDocumentService, DocumentService>();
+        services.AddScoped<WorkspaceService>();
         services.AddScoped<IInvoiceService, InvoiceService>();
         services.AddScoped<IProcessingService, ProcessingService>();
         services.AddScoped<IInvoiceQueue, InvoiceQueue>();

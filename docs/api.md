@@ -17,7 +17,7 @@ All document, invoice, processing and original-file endpoints require a Wida ses
 - IDs are GUID strings. All ID route segments have a `:guid` constraint; malformed IDs do not match these routes.
 - Invoice dates use `YYYY-MM-DD`. Server timestamps are generated in UTC and serialized as ISO 8601 timestamps.
 - Successful resource creation returns `201 Created`; analysis admission returns `202 Accepted`. Both include a response body and a `Location` header.
-- Collection endpoints return JSON arrays, including `[]` when empty. Most document/invoice lists have no pagination or filtering; the workspace supports a bounded limit and the admin user list supports search/page parameters.
+- Collection endpoints return JSON arrays, including `[]` when empty. The paginated workspace returns an envelope with items, total, page, pageSize and global summary; the admin user list also supports search/page parameters. Legacy collection routes remain available.
 - Authentication is required for data routes. Every record is scoped to its document owner; see [session setup](authentication.md).
 - In Development, interactive documentation is available at `/scalar/v1`, and OpenAPI JSON is available at `/openapi/v1.json`.
 
@@ -27,6 +27,8 @@ All document, invoice, processing and original-file endpoints require a Wida ses
 | --- | --- | --- | --- |
 | `GET` | `/api/documents` | None | `200`, array of documents, newest upload first |
 | `GET` | `/api/documents/{id}` | None | `200`, document |
+| `GET` | `/api/documents/workspace/page` | Pagination, search, filters and sort (below) | `200`, `{ items, total, page, pageSize, summary }` |
+| `GET` | `/api/documents/workspace/{id}` | Document ID | `200`, document/invoice/latest-run summary |
 | `GET` | `/api/documents/workspace?limit=100` | Optional limit, 1–500 | `200`, array of document/invoice/latest-run summaries |
 | `GET` | `/api/documents/{id}/content` | Optional `download=true` | `200` original bytes; `206` for a valid byte range |
 | `POST` | `/api/documents` | Multipart form field `file` | `201`, document |
@@ -43,7 +45,10 @@ All document, invoice, processing and original-file endpoints require a Wida ses
 ### Workspace and original files
 
 - `GET /api/documents/workspace?limit=100` returns an array of `{ "document": DocumentResponse, "invoice": InvoiceResponse|null, "latestRun": ProcessingRunResponse|null }`. The default limit is 100; supported limits are 1–500. Documents are ordered by upload time descending, with ID as a stable tie-breaker. The latest run is selected by start time, then ID descending. An empty workspace is `[]`.
-- The workspace loads invoices, their lines, and only the latest run with its extracted fields through a bounded EF split query. It does not query each document separately. Filtering/search/paging beyond the latest loaded documents is not implemented.
+- The live frontend uses `GET /api/documents/workspace/page`. Parameters: `page` (default 1, positive), `pageSize` (default 10, 1–100), `search` (up to 500 characters), `view=documents|invoices`, `filter=all|review|processing|saved|failed|uploaded`, `currency` (optional three-letter code), `period=all|7|30` and `sort=newest|oldest|supplier`. Invalid criteria return `400`.
+- Search matches filenames, suppliers, invoice numbers and currencies, including values from the latest extraction. Saved invoice values take precedence. Currency extraction requires confidence ≥ 0.8 and no review flag. The processing filter also includes saved invoices being reanalysed.
+- Filtering, counting, sorting and pagination execute in PostgreSQL before loading page details. Equal sort values use document ID as a stable tie-breaker. Pages beyond the last page are clamped. Empty results return `items: []`, `total: 0`, `page: 1`. There is no 500-document search window.
+- `summary` contains owner-wide `total`, `counts` by stage, `active` analysis count, `currencies` and monthly `{ year, month, uploaded, saved }` buckets. These remain independent of table filters and pagination. Invoices, lines and the latest run are loaded only for the requested page using a split query. The detail route supports direct links to documents outside the current page.
 - `GET /api/documents/{id}/content` streams original bytes with the canonical PDF/image content type, inline Content-Disposition, byte-range support, `X-Content-Type-Options: nosniff`, and `Cache-Control: private, no-store`. Add `?download=true` for attachment disposition. Filenames are header-encoded; storage paths are never returned. Browser support for TIFF previews varies; download is available.
 - Retrieval returns `404` for missing metadata/objects or invalid signatures. Local storage also rejects symlinks and paths outside the upload directory. Expired ordinary-user originals return `410`. Storage outages are errors, not missing-object responses.
 - `GET /api/invoices` returns all saved invoices with lines, newest creation first. `PUT /api/invoices/{id}` updates a saved invoice as described below.

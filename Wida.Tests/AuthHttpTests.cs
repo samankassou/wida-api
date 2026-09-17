@@ -48,6 +48,8 @@ public sealed class AuthHttpTests
     [InlineData("PUT", "/api/admin/users/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/trial")]
     [InlineData("GET", "/api/documents")]
     [InlineData("GET", "/api/documents/workspace")]
+    [InlineData("GET", "/api/documents/workspace/page")]
+    [InlineData("GET", "/api/documents/workspace/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")]
     [InlineData("GET", "/api/documents/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/content")]
     [InlineData("GET", "/api/invoices")]
     [InlineData("GET", "/api/processing/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")]
@@ -61,6 +63,31 @@ public sealed class AuthHttpTests
         var response = await browser.SendAsync(method, path);
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         Assert.Null(response.Headers.Location);
+    }
+
+    [Theory]
+    [InlineData("?page=0", HttpStatusCode.BadRequest)]
+    [InlineData("?pageSize=101", HttpStatusCode.BadRequest)]
+    [InlineData("?sort=unknown", HttpStatusCode.BadRequest)]
+    [InlineData("?period=5", HttpStatusCode.BadRequest)]
+    [InlineData("?filter=unknown", HttpStatusCode.BadRequest)]
+    [InlineData("?view=unknown", HttpStatusCode.BadRequest)]
+    [InlineData("?currency=EURO", HttpStatusCode.BadRequest)]
+    [InlineData("?search=&currency=&page=1&pageSize=10&sort=newest&view=documents&filter=all&period=all", HttpStatusCode.OK)]
+    public async Task Workspace_query_binding_validates_criteria_and_accepts_empty_optional_filters(string query, HttpStatusCode expected)
+    {
+        await using var factory = new AuthFactory();
+        using var browser = new TestBrowser(factory);
+        await browser.GoogleLoginAsync("alice@example.com", "google-alice");
+        var response = await browser.SendAsync("GET", "/api/documents/workspace/page" + query);
+        Assert.Equal(expected, response.StatusCode);
+        if (expected == HttpStatusCode.OK)
+        {
+            var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+            Assert.Equal(0, body.GetProperty("total").GetInt32());
+            Assert.Equal(0, body.GetProperty("items").GetArrayLength());
+            Assert.Equal(0, body.GetProperty("summary").GetProperty("total").GetInt32());
+        }
     }
 
     [Fact]

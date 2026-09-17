@@ -53,6 +53,19 @@ public class DocumentsController : ControllerBase
         return Ok(document);
     }
 
+    [HttpGet("workspace/page")]
+    public async Task<IActionResult> GetWorkspacePage([FromQuery] Wida.Bll.Dtos.Documents.WorkspaceQuery query,
+        [FromServices] Wida.Bll.Services.Implementations.WorkspaceService workspace, CancellationToken cancellationToken)
+        => Ok(await workspace.GetPageAsync(query, cancellationToken));
+
+    [HttpGet("workspace/{id:guid}")]
+    public async Task<IActionResult> GetWorkspaceItem(Guid id,
+        [FromServices] Wida.Bll.Services.Implementations.WorkspaceService workspace, CancellationToken cancellationToken)
+    {
+        var item = await workspace.GetItemAsync(id, cancellationToken);
+        return item is null ? NotFound() : Ok(item);
+    }
+
     [HttpGet("workspace")]
     public async Task<IActionResult> GetWorkspace(CancellationToken cancellationToken, [FromQuery] int limit = 100)
     {
