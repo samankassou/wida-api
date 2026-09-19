@@ -392,3 +392,9 @@ These routes do not expose other users' original files or invoice contents. Indi
 ```
 
 After user acknowledgement, retry the same create/update payload with `allowDuplicate: true` (default false). The one-invoice-per-document rule and validation still apply. Checks stream account-scoped invoice headers across all saved records, returning at most ten matches; they do not depend on the workspace list limit. No migration is required. There is no cross-document uniqueness constraint, so concurrent saves can both succeed before either sees a match.
+
+## Delete a document
+
+`DELETE /api/documents/{id}` requires an authenticated owner and the usual CSRF/proxy protections. Returns `204` after removing the document, its invoice and lines, processing runs and extracted fields; returns `404` for a missing document or another user's document. Returns `409` while any analysis is pending or running.
+
+The original file is removed after the database deletion commits. Storage cleanup failures are logged for operator follow-up. Analysis credits already consumed are not refunded. No database migration or configuration changes are needed.
