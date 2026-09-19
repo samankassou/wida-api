@@ -1,6 +1,6 @@
 # Deployment checklist
 
-Production deployment follows published releases through the `production` branch. Configure the hosting branch before relying on this behavior; see [release setup and verification](releases.md#production-branch-setup).
+Production deploys only after publication of a release tag. Feature work integrates on `develop`; `main` holds release history. Configure hosting and GitHub secrets using [the GitFlow release guide](releases.md#hosting-setup).
 
 This guide is for operators hosting their own Wida instance. The source is available under the [MIT License](../LICENSE); Google, Azure, and hosting services require your own configuration and may incur costs. The repository does not provision infrastructure or promise a hosted service.
 

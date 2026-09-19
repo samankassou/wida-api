@@ -54,33 +54,36 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          export RELEASE_COMMIT="$(git rev-parse HEAD)"
-          prs=$(gh pr list --repo "$GITHUB_REPOSITORY" --state merged --base main \
+          release_commit=$(git rev-parse HEAD)
+          gh pr list --repo "$GITHUB_REPOSITORY" --state merged \
             --label "autorelease: pending" --limit 100 --json number,mergeCommit \
-            --jq '.[] | select(.mergeCommit.oid == env.RELEASE_COMMIT) | .number')
-          for pr in $prs; do
-            gh pr edit "$pr" --repo "$GITHUB_REPOSITORY" --remove-label "autorelease: pending"
-          done
+            --jq '.[] | [.number, .mergeCommit.oid] | @tsv' > "$RUNNER_TEMP/release-prs.tsv"
+          while IFS=$'\t' read -r pr commit; do
+            if [ -n "$commit" ] && git merge-base --is-ancestor "$commit" "$release_commit"; then
+              gh pr edit "$pr" --repo "$GITHUB_REPOSITORY" --remove-label "autorelease: pending"
+            fi
+          done < "$RUNNER_TEMP/release-prs.tsv"
 
   deploy:
-    name: Promote published release to production
+    name: Deploy published release
     needs: publish
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 25
     permissions:
-      contents: write
+      contents: read
     concurrency:
-      group: production-promotion
+      group: production-deployment
       cancel-in-progress: false
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ github.ref_name }}
+      RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Verify publication and advance production
+      - name: Verify published release is current main
         shell: bash
         run: |
           set -euo pipefail
@@ -88,13 +91,15 @@ jobs:
             --json isDraft,isPrerelease,tagName \
             --jq 'select(.isDraft == false and .isPrerelease == false) | .tagName' \
             | grep -Fx -- "$RELEASE_TAG"
+          # A stale release retry must not roll production back.
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+      - name: Request Render deployment of the tagged commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${RENDER_DEPLOY_HOOK_URL:?Add the RENDER_DEPLOY_HOOK_URL repository secret}"
           release_commit=$(git rev-parse HEAD)
-          # Never deploy an older release over a newer one, including on retries.
-          git merge-base --is-ancestor origin/production "$release_commit"
-          if [ "$(git rev-parse origin/production)" = "$release_commit" ]; then
-            echo "Production already points to $RELEASE_TAG."
-            exit 0
-          fi
-          gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/heads/production" \
-            -f sha="$release_commit" -F force=false --silent
-          echo "Production branch advanced to $RELEASE_TAG ($release_commit). Check the hosting deployment for completion." >> "$GITHUB_STEP_SUMMARY"
+          curl --fail --silent --show-error --max-time 60 \
+            --get --request POST --data-urlencode "ref=$release_commit" \
+            "$RENDER_DEPLOY_HOOK_URL" --output "$RUNNER_TEMP/render-deploy.json"
+          echo "Render accepted deployment of $RELEASE_TAG ($release_commit). Verify completion and commit SHA in Render before claiming the release is live." >> "$GITHUB_STEP_SUMMARY"
