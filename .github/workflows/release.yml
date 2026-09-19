@@ -1,0 +1,63 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+  publish:
+    name: Publish GitHub Release
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+      - name: Verify released commit belongs to main
+        run: git merge-base --is-ancestor HEAD origin/main
+      - name: Extract version-matched changelog
+        run: node scripts/release-notes.mjs "$RELEASE_TAG" > "$RUNNER_TEMP/release-notes.md"
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft > "$RUNNER_TEMP/existing-release.json" 2>/dev/null; then
+            # Only an already published release completes this step on a retry.
+            jq -e '.isDraft == false' "$RUNNER_TEMP/existing-release.json" > /dev/null
+          else
+            gh release create "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --title "Wida API $RELEASE_TAG" \
+              --notes-file "$RUNNER_TEMP/release-notes.md"
+          fi
+      - name: Mark release PR as published
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          export RELEASE_COMMIT="$(git rev-parse HEAD)"
+          prs=$(gh pr list --repo "$GITHUB_REPOSITORY" --state merged --base main \
+            --label "autorelease: pending" --limit 100 --json number,mergeCommit \
+            --jq '.[] | select(.mergeCommit.oid == env.RELEASE_COMMIT) | .number')
+          for pr in $prs; do
+            gh pr edit "$pr" --repo "$GITHUB_REPOSITORY" --remove-label "autorelease: pending"
+          done

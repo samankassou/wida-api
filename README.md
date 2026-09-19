@@ -1,5 +1,7 @@
 # Wida API
 
+[Changelog](CHANGELOG.md) · [Release process](docs/releases.md)
+
 Wida is an open-source ASP.NET Core API for uploading documents, recording invoices and line items, and tracking invoice analysis with Azure Document Intelligence. It targets .NET 10, stores application data in PostgreSQL through Entity Framework Core, and stores uploaded originals either locally or in private Supabase Storage.
 
 ## Documentation
