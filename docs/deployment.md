@@ -1,5 +1,7 @@
 # Deployment checklist
 
+Production deployment follows published releases through the `production` branch. Configure the hosting branch before relying on this behavior; see [release setup and verification](releases.md#production-branch-setup).
+
 This guide is for operators hosting their own Wida instance. The source is available under the [MIT License](../LICENSE); Google, Azure, and hosting services require your own configuration and may incur costs. The repository does not provision infrastructure or promise a hosted service.
 
 For the optional Render Free/Supabase deployment, use the [step-by-step configuration and secrets guide](render-free.md). Its sleep behavior and classic-queue guarantees differ from an always-running VPS.

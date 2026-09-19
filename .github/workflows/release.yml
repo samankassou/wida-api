@@ -61,3 +61,40 @@ jobs:
           for pr in $prs; do
             gh pr edit "$pr" --repo "$GITHUB_REPOSITORY" --remove-label "autorelease: pending"
           done
+
+  deploy:
+    name: Promote published release to production
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    concurrency:
+      group: production-promotion
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify publication and advance production
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --json isDraft,isPrerelease,tagName \
+            --jq 'select(.isDraft == false and .isPrerelease == false) | .tagName' \
+            | grep -Fx -- "$RELEASE_TAG"
+          release_commit=$(git rev-parse HEAD)
+          # Never deploy an older release over a newer one, including on retries.
+          git merge-base --is-ancestor origin/production "$release_commit"
+          if [ "$(git rev-parse origin/production)" = "$release_commit" ]; then
+            echo "Production already points to $RELEASE_TAG."
+            exit 0
+          fi
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/heads/production" \
+            -f sha="$release_commit" -F force=false --silent
+          echo "Production branch advanced to $RELEASE_TAG ($release_commit). Check the hosting deployment for completion." >> "$GITHUB_STEP_SUMMARY"
