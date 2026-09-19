@@ -4,7 +4,7 @@ The API and frontend have independent versions and tags. Release Please uses the
 
 ## First release
 
-No API release has previously been published. `0.0.0` is an unpublished bootstrap marker; the first feature release is expected to be `0.1.0`. The bootstrap commit `36a04fdb52708c6a82cc627adeaf1e407272e379` excludes earlier history while including the already-deployed document deletion change. Do not tag `0.0.0` or invent historical release dates. The bootstrap SHA only applies before the first published release.
+The API release history starts at `0.1.0`. `0.0.0` was an unpublished bootstrap marker. The bootstrap commit `36a04fdb52708c6a82cc627adeaf1e407272e379` excludes earlier history while including the already-deployed document deletion change. Do not tag `0.0.0` or invent historical release dates. The bootstrap SHA only applies before the first published release.
 
 ## Automated preparation
 

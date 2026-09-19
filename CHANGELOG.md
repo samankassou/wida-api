@@ -1,8 +1,10 @@
 # Changelog
 
-User-visible API changes. API releases are versioned independently from the frontend. This repository has no previously published release history; `0.0.0` is only a bootstrap marker, not a historical release.
+User-visible API changes. API releases are versioned independently from the frontend.
 
 ## [Unreleased]
+
+## 0.1.0 (2026-09-19)
 
 ### Added
 
