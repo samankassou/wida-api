@@ -2,6 +2,14 @@
 
 User-visible API changes. API releases are versioned independently from the frontend. This repository has no previously published release history; `0.0.0` is only a bootstrap marker, not a historical release.
 
+## 0.1.0 (2026-09-19)
+
+
+### Added
+
+* **documents:** add owner-scoped document deletion ([7d88474](https://github.com/samankassou/wida-api/commit/7d884743372692bee3d4c8eaa877d496842e4e93))
+* **release:** automate API changelogs and release preparation ([e89fdfe](https://github.com/samankassou/wida-api/commit/e89fdfe01cc86caafae054c9dfdf04641182ea38))
+
 ## [Unreleased]
 
 ### Added
