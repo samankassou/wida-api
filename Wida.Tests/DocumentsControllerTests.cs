@@ -226,7 +226,7 @@ public sealed class DocumentsControllerTests : IDisposable
         var service = new StubDocumentService((_, _, _, _) => throw new Exception("Must not persist"));
         Assert.IsType<BadRequestObjectResult>(await CreateController(service).Upload(file, default));
         Assert.Empty(Directory.GetFiles(_contentRoot, "*", SearchOption.AllDirectories));
-        Assert.Empty(await db.Documents.ToListAsync());
+        Assert.Empty(await db.Documents.IgnoreQueryFilters().ToListAsync());
     }
 
     [Fact]
@@ -324,6 +324,68 @@ public sealed class DocumentsControllerTests : IDisposable
         Assert.Empty(Directory.GetFiles(_contentRoot, "*", SearchOption.AllDirectories));
     }
 
+    [Fact]
+    public async Task Delete_RemovesDocumentChildrenAndOriginal()
+    {
+        var document = new Document { StoragePath = "supabase:test.pdf",
+            Invoice = new Invoice { Lines = [new InvoiceLine()] },
+            ProcessingRuns = [new ProcessingRun { Status = ProcessingStatus.Completed,
+                ExtractedFields = [new ExtractedField { FieldName = "VendorName" }] }] };
+        db.Documents.Add(document);
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
+        var storage = new MemoryStorage();
+        var service = new StubDocumentService((_, _, _, _) => throw new InvalidOperationException());
+
+        Assert.IsType<NoContentResult>(await CreateController(service, storage).Delete(document.Id, default));
+
+        Assert.Empty(await db.Documents.IgnoreQueryFilters().ToListAsync());
+        Assert.Empty(await db.Invoices.IgnoreQueryFilters().ToListAsync());
+        Assert.Empty(await db.InvoiceLines.IgnoreQueryFilters().ToListAsync());
+        Assert.Empty(await db.ProcessingRuns.IgnoreQueryFilters().ToListAsync());
+        Assert.Empty(await db.ExtractedFields.IgnoreQueryFilters().ToListAsync());
+        Assert.True(storage.Deleted);
+        Assert.IsType<NotFoundResult>(await CreateController(service, storage).Delete(document.Id, default));
+    }
+
+    [Theory]
+    [InlineData(ProcessingStatus.Pending)]
+    [InlineData(ProcessingStatus.Running)]
+    public async Task Delete_RejectsActiveAnalysis(ProcessingStatus status)
+    {
+        var document = new Document { ProcessingRuns = [new ProcessingRun { Status = status }] };
+        db.Documents.Add(document);
+        await db.SaveChangesAsync();
+        var storage = new MemoryStorage();
+        var service = new StubDocumentService((_, _, _, _) => throw new InvalidOperationException());
+
+        var result = Assert.IsType<ObjectResult>(await CreateController(service, storage).Delete(document.Id, default));
+
+        Assert.Equal(409, result.StatusCode);
+        Assert.True(await db.Documents.AnyAsync(x => x.Id == document.Id));
+        Assert.False(storage.Deleted);
+    }
+
+    [Fact]
+    public async Task Delete_CannotRemoveAnotherUsersDocument()
+    {
+        var other = new AppUser { GoogleSubject = "other-user" };
+        await using (var foreign = new WidaDbContext(new DbContextOptionsBuilder<WidaDbContext>().UseSqlite(connection).Options, new TestCurrentUser(other.Id)))
+        {
+            foreign.Users.Add(other);
+            foreign.Documents.Add(new Document());
+            await foreign.SaveChangesAsync();
+        }
+        var id = await db.Documents.IgnoreQueryFilters().Select(x => x.Id).SingleAsync();
+        var storage = new MemoryStorage();
+        var service = new StubDocumentService((_, _, _, _) => throw new InvalidOperationException());
+
+        Assert.IsType<NotFoundResult>(await CreateController(service, storage).Delete(id, default));
+
+        Assert.True(await db.Documents.IgnoreQueryFilters().AnyAsync(x => x.Id == id));
+        Assert.False(storage.Deleted);
+    }
+
     private sealed class MemoryStorage : IDocumentStorage
     {
         public byte[]? Bytes;
@@ -338,7 +400,7 @@ public sealed class DocumentsControllerTests : IDisposable
     private DocumentsController CreateController(IDocumentService service, IDocumentStorage? storage = null) =>
         new(service, new TestWebHostEnvironment { ContentRootPath = _contentRoot }, storage)
         {
-            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext { RequestServices = new ServiceCollection().AddSingleton(db).BuildServiceProvider() } }
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext { RequestServices = new ServiceCollection().AddSingleton(db).AddLogging().AddMvcCore().Services.BuildServiceProvider() } }
         };
 
     internal static byte[] ValidPdf(int pages = 1)

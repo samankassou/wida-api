@@ -53,6 +53,35 @@ public class DocumentsController : ControllerBase
         return Ok(document);
     }
 
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Delete(Guid id, CancellationToken cancellationToken)
+    {
+        var db = HttpContext.RequestServices.GetRequiredService<WidaDbContext>();
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        // Serialize deletion with uploads and analysis admission across API replicas.
+        if (db.Database.IsNpgsql())
+            await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(73190421)", cancellationToken);
+        var document = await db.Documents.SingleOrDefaultAsync(x => x.Id == id, cancellationToken);
+        if (document is null) return NotFound();
+        if (await db.ProcessingRuns.AnyAsync(x => x.DocumentId == id &&
+            (x.Status == Wida.Dal.Enums.ProcessingStatus.Pending || x.Status == Wida.Dal.Enums.ProcessingStatus.Running), cancellationToken))
+            return Problem(statusCode: 409, detail: "Wait for the analysis to finish before deleting this document.");
+
+        // Database cascades remove invoices, lines, runs and extracted fields.
+        db.Documents.Remove(document);
+        await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        // Never delete a file before its metadata deletion has committed. Finish cleanup
+        // even if the browser disconnects after the commit.
+        try { await _storage.DeleteAsync(document.StoragePath, CancellationToken.None); }
+        catch (Exception ex)
+        {
+            HttpContext.RequestServices.GetService<ILogger<DocumentsController>>()?
+                .LogWarning(ex, "Could not remove deleted original {DocumentId} at {StoragePath}.", id, document.StoragePath);
+        }
+        return NoContent();
+    }
+
     [HttpGet("workspace/page")]
     public async Task<IActionResult> GetWorkspacePage([FromQuery] Wida.Bll.Dtos.Documents.WorkspaceQuery query,
         [FromServices] Wida.Bll.Services.Implementations.WorkspaceService workspace, CancellationToken cancellationToken)

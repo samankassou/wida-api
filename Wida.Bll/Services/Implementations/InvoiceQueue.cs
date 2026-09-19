@@ -13,12 +13,12 @@ public sealed class InvoiceQueue(WidaDbContext db, IAnalysisJobPublisher publish
 {
     public async Task<ProcessingRunResponse> EnqueueAsync(Guid documentId, CancellationToken cancellationToken = default, bool reanalyze = false)
     {
-        var document = await db.Documents.SingleOrDefaultAsync(x => x.Id == documentId, cancellationToken)
-            ?? throw new DocumentNotFoundException(documentId);
         // Short transaction serializes admission/capacity checks across API replicas.
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
         if (db.Database.IsNpgsql())
             await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(73190421)", cancellationToken);
+        var document = await db.Documents.SingleOrDefaultAsync(x => x.Id == documentId, cancellationToken)
+            ?? throw new DocumentNotFoundException(documentId);
         var user = await db.Users.SingleAsync(x => x.Id == document.OwnerUserId, cancellationToken);
         var isAdmin = user.Role == UserRole.Admin;
         var active = db.ProcessingRuns.Where(x => x.IsBackgroundJob
